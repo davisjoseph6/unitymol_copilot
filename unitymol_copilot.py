@@ -26,65 +26,24 @@ fast = FastAgent("UnityMol Copilot")
 # Global UnityMolZMQ instance
 unitymol = None
 
-@fast.agent(
-    "unitymol_copilot",
-    instruction="""
-    You are an expert assistant for UnityMol, a molecular visualization application.
-    Your role is to help users interact with UnityMol by translating their natural language requests
-    into appropriate UnityMol API calls.
-    
-    When responding to user requests:
-    1. Understand what the user wants to accomplish with UnityMol
-    2. Generate the appropriate UnityMol API call(s) to fulfill the request
-    3. Execute the API call(s) using the execute_unitymol_command function and interpret the results
-    4. Provide a clear, helpful response to the user
-    
-    Always format your UnityMol API calls exactly as they should be executed.
-    If you're unsure about a request, ask for clarification.
-    If a request requires multiple API calls, execute them in the appropriate sequence.
-    
-    Keep track of loaded structures and selections to provide context-aware assistance.
-    """
-)
-async def main():
-    """
-    Main entry point for the UnityMol Copilot.
-    """
-    global unitymol
-    
-    # Initialize UnityMolZMQ
-    unitymol = UnityMolZMQ()
-    
-    # Test connection to UnityMol
-    if not unitymol.test_connection():
-        logger.error("Failed to connect to UnityMol. Make sure it's running with the ZMQ server enabled.")
-        print("Failed to connect to UnityMol. Make sure it's running with the ZMQ server enabled.")
-        return
-    
-    logger.info("Successfully connected to UnityMol")
-    print("Successfully connected to UnityMol")
-    
-    # Start interactive session
-    async with fast.run() as agent:
-        await agent.interactive()
-
-# Function to execute UnityMol commands
-async def execute_unitymol_command(command):
+# Define function schema for execute_unitymol_command
+@fast.function
+async def execute_unitymol_command(command: str) -> dict:
     """
     Execute a UnityMol API command and return the result.
-    
+
     Args:
         command (str): The UnityMol API command to execute
-        
+
     Returns:
         dict: The result of the command execution
     """
     global unitymol
-    
+
     try:
         # Execute the command
         result = unitymol.send_command(command)
-        
+
         return {
             "success": result.get("success", False),
             "result": result.get("result", ""),
@@ -100,11 +59,12 @@ async def execute_unitymol_command(command):
             "command": command
         }
 
-# Function to get available UnityMol commands
-async def get_unitymol_api_info():
+# Define function schema for get_unitymol_api_info
+@fast.function
+async def get_unitymol_api_info() -> dict:
     """
     Get information about available UnityMol API commands.
-    
+
     Returns:
         dict: Information about UnityMol API commands
     """
@@ -141,9 +101,51 @@ async def get_unitymol_api_info():
         ]
     }
 
-# Register functions with FastAgent
-fast.register_function(execute_unitymol_command)
-fast.register_function(get_unitymol_api_info)
+@fast.agent(
+    "unitymol_copilot",
+    instruction="""
+    You are an expert assistant for UnityMol, a molecular visualization application.
+    Your role is to help users interact with UnityMol by translating their natural language requests
+    into appropriate UnityMol API calls.
+
+    When responding to user requests:
+    1. Understand what the user wants to accomplish with UnityMol
+    2. Generate the appropriate UnityMol API call(s) to fulfill the request
+    3. Execute the API call(s) using the execute_unitymol_command function and interpret the results
+    4. Provide a clear, helpful response to the user
+
+    Available functions:
+    - execute_unitymol_command(command: str) -> dict: Execute UnityMol commands
+    - get_unitymol_api_info() -> dict: Get information about available API commands
+
+    Always format your UnityMol API calls exactly as they should be executed.
+    If you're unsure about a request, ask for clarification.
+    If a request requires multiple API calls, execute them in the appropriate sequence.
+
+    Keep track of loaded structures and selections to provide context-aware assistance.
+    """
+)
+async def main():
+    """
+    Main entry point for the UnityMol Copilot.
+    """
+    global unitymol
+
+    # Initialize UnityMolZMQ
+    unitymol = UnityMolZMQ()
+
+    # Test connection to UnityMol
+    if not unitymol.test_connection():
+        logger.error("Failed to connect to UnityMol. Make sure it's running with the ZMQ server enabled.")
+        print("Failed to connect to UnityMol. Make sure it's running with the ZMQ server enabled.")
+        return
+
+    logger.info("Successfully connected to UnityMol")
+    print("Successfully connected to UnityMol")
+
+    # Start interactive session
+    async with fast.run() as agent:
+        await agent.interactive()
 
 # Run the application
 if __name__ == "__main__":
