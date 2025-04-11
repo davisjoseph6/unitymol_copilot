@@ -65,9 +65,9 @@ class UnityMolCopilot:
         # Initialize FastAgent
         self.agent = FastAgent(
             name="UnityMol Copilot",
-            system_prompt=self.system_prompt,
-            model=self.model_name,
-            model_provider="ollama"
+#            system_prompt=self.system_prompt,
+#            model=self.model_name,
+#            model_provider="ollama"
         )
         
         # Add tools to the agent
