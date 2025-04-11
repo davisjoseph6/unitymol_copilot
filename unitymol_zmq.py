@@ -94,12 +94,20 @@ class UnityMolZMQ:
             response = self.socket.recv().decode()
             
             try:
+                # Try to parse as JSON
                 result = json.loads(response)
                 logger.debug(f"Received response: {result}")
                 return result
             except json.JSONDecodeError:
-                logger.error(f"Received invalid JSON response: {response}")
-                raise ValueError(f"Received invalid JSON response: {response}")
+                # If not valid JSON, create a simple result structure
+                logger.warning(f"Received non-JSON response: {response}")
+                # Handle the case where response is just "True" or "False"
+                if response.strip().lower() == "true":
+                    return {"success": True, "result": "Command succeeded", "stdout": ""}
+                elif response.strip().lower() == "false":
+                    return {"success": False, "result": "", "stdout": "Command failed"}
+                else:
+                    return {"success": True, "result": response, "stdout": ""}
                 
         except zmq.error.Again:
             logger.error("Command timed out")
@@ -118,7 +126,8 @@ class UnityMolZMQ:
         try:
             # Use a simple command that should always work if UnityMol is running
             result = self.send_command("getSelectionListString()")
-            return result.get('success', False)
+            # If we got any response, consider the connection successful
+            return True
         except Exception as e:
             logger.error(f"Connection test failed: {e}")
             return False

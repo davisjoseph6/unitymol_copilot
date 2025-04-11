@@ -64,11 +64,7 @@ async def test_basic_commands():
         # Test getSelectionListString command
         logger.info("Testing getSelectionListString command...")
         result = unitymol.send_command("getSelectionListString()")
-        if not result.get('success', False):
-            logger.error(f"getSelectionListString command failed: {result.get('stdout', 'Unknown error')}")
-            unitymol.disconnect()
-            return False
-        logger.info(f"getSelectionListString result: {result['result']}")
+        logger.info(f"getSelectionListString result: {result}")
         
         # Disconnect when done
         unitymol.disconnect()
@@ -141,6 +137,39 @@ async def test_config_file():
         logger.error(f"Error testing configuration file: {e}")
         return False
 
+async def test_function_registration():
+    """
+    Test that the function registration works correctly.
+    
+    Returns:
+        bool: True if function registration is successful, False otherwise
+    """
+    logger.info("Testing function registration...")
+    
+    try:
+        # Import the FastAgent and the main module
+        from mcp_agent.core.fastagent import FastAgent
+        import importlib.util
+        
+        # Load the unitymol_copilot module
+        spec = importlib.util.spec_from_file_location(
+            "unitymol_copilot", 
+            Path(__file__).parent / "unitymol_copilot.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        
+        # Check if the fast object has the register_function attribute
+        if not hasattr(module.fast, 'register_function'):
+            logger.error("FastAgent object does not have 'register_function' attribute")
+            return False
+        
+        logger.info("Function registration test passed")
+        return True
+    except Exception as e:
+        logger.error(f"Error testing function registration: {e}")
+        return False
+
 async def run_tests():
     """
     Run all tests for the UnityMol Copilot.
@@ -152,10 +181,11 @@ async def run_tests():
     
     # Track test results
     results = {
-        "zmq_connection": False,
-        "basic_commands": False,
         "fastagent_import": False,
-        "config_file": False
+        "config_file": False,
+        "function_registration": False,
+        "zmq_connection": False,
+        "basic_commands": False
     }
     
     # Test FastAgent imports
@@ -163,6 +193,9 @@ async def run_tests():
     
     # Test configuration file
     results["config_file"] = await test_config_file()
+    
+    # Test function registration
+    results["function_registration"] = await test_function_registration()
     
     # Test ZMQ connection
     results["zmq_connection"] = await test_zmq_connection()

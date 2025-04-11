@@ -36,7 +36,7 @@ unitymol = None
     When responding to user requests:
     1. Understand what the user wants to accomplish with UnityMol
     2. Generate the appropriate UnityMol API call(s) to fulfill the request
-    3. Execute the API call(s) using the execute_unitymol_command tool and interpret the results
+    3. Execute the API call(s) using the execute_unitymol_command function and interpret the results
     4. Provide a clear, helpful response to the user
     
     Always format your UnityMol API calls exactly as they should be executed.
@@ -68,19 +68,8 @@ async def main():
     async with fast.run() as agent:
         await agent.interactive()
 
-# Tool to execute UnityMol commands
-@fast.tool(
-    name="execute_unitymol_command",
-    description="Execute a UnityMol API command and return the result",
-    parameters=[
-        {
-            "name": "command",
-            "type": "string",
-            "description": "The UnityMol API command to execute"
-        }
-    ]
-)
-def execute_unitymol_command(command):
+# Function to execute UnityMol commands
+async def execute_unitymol_command(command):
     """
     Execute a UnityMol API command and return the result.
     
@@ -111,13 +100,8 @@ def execute_unitymol_command(command):
             "command": command
         }
 
-# Tool to get available UnityMol commands
-@fast.tool(
-    name="get_unitymol_api_info",
-    description="Get information about available UnityMol API commands",
-    parameters=[]
-)
-def get_unitymol_api_info():
+# Function to get available UnityMol commands
+async def get_unitymol_api_info():
     """
     Get information about available UnityMol API commands.
     
@@ -156,6 +140,10 @@ def get_unitymol_api_info():
             }
         ]
     }
+
+# Register functions with FastAgent
+fast.register_function(execute_unitymol_command)
+fast.register_function(get_unitymol_api_info)
 
 # Run the application
 if __name__ == "__main__":
