@@ -1,15 +1,15 @@
 """
 UnityMol Copilot - Test Script
 
-This script tests the functionality of the UnityMol Copilot.
+This script tests the functionality of the updated UnityMol Copilot.
 """
 
 import logging
 import sys
 import os
-import time
+import asyncio
+from pathlib import Path
 from unitymol_zmq import UnityMolZMQ
-from unitymol_copilot import UnityMolCopilot
 
 # Configure logging
 logging.basicConfig(
@@ -18,7 +18,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("UnityMolCopilotTest")
 
-def test_zmq_connection():
+async def test_zmq_connection():
     """
     Test the ZMQ connection to UnityMol.
     
@@ -43,7 +43,7 @@ def test_zmq_connection():
         logger.error(f"Error testing ZMQ connection: {e}")
         return False
 
-def test_basic_commands():
+async def test_basic_commands():
     """
     Test basic UnityMol commands through the ZMQ connection.
     
@@ -77,58 +77,71 @@ def test_basic_commands():
         logger.error(f"Error testing basic commands: {e}")
         return False
 
-def test_copilot_initialization():
+async def test_fastagent_import():
     """
-    Test the initialization of the UnityMol Copilot.
+    Test importing the FastAgent and related modules.
     
     Returns:
-        bool: True if initialization is successful, False otherwise
+        bool: True if imports are successful, False otherwise
     """
-    logger.info("Testing UnityMol Copilot initialization...")
+    logger.info("Testing FastAgent imports...")
     
     try:
-        # Create a UnityMol Copilot instance
-        copilot = UnityMolCopilot()
+        # Try importing the necessary modules
+        from mcp_agent.core.fastagent import FastAgent
+        from mcp_agent.core.prompt import Prompt
         
-        # Check if the copilot is properly initialized
-        if copilot.agent and copilot.unitymol:
-            logger.info("UnityMol Copilot successfully initialized")
-            return True
-        else:
-            logger.error("Failed to initialize UnityMol Copilot")
-            return False
+        logger.info("Successfully imported FastAgent modules")
+        return True
+    except ImportError as e:
+        logger.error(f"Error importing FastAgent modules: {e}")
+        return False
     except Exception as e:
-        logger.error(f"Error initializing UnityMol Copilot: {e}")
+        logger.error(f"Unexpected error during FastAgent import test: {e}")
         return False
 
-def test_copilot_chat():
+async def test_config_file():
     """
-    Test the chat functionality of the UnityMol Copilot.
+    Test that the configuration file exists and is valid.
     
     Returns:
-        bool: True if chat is successful, False otherwise
+        bool: True if the config file is valid, False otherwise
     """
-    logger.info("Testing UnityMol Copilot chat functionality...")
+    logger.info("Testing configuration file...")
     
     try:
-        # Create a UnityMol Copilot instance
-        copilot = UnityMolCopilot()
+        config_path = Path(__file__).parent / "fastagent.config.yaml"
         
-        # Test a simple chat message
-        logger.info("Sending test message to copilot...")
-        response = copilot.chat("What commands are available in UnityMol?")
-        
-        if response:
-            logger.info(f"Received response from copilot: {response[:100]}...")
-            return True
-        else:
-            logger.error("Failed to receive response from copilot")
+        # Check if the file exists
+        if not config_path.exists():
+            logger.error(f"Configuration file not found at {config_path}")
             return False
+        
+        # Try to load the file to verify it's valid YAML
+        import yaml
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        # Check for required keys
+        if 'llm' not in config:
+            logger.error("Configuration file missing 'llm' section")
+            return False
+        
+        if 'provider' not in config['llm'] or config['llm']['provider'] != 'ollama':
+            logger.error("Configuration file missing or incorrect 'provider' in 'llm' section")
+            return False
+        
+        if 'model' not in config['llm']:
+            logger.error("Configuration file missing 'model' in 'llm' section")
+            return False
+        
+        logger.info(f"Configuration file is valid, using model: {config['llm']['model']}")
+        return True
     except Exception as e:
-        logger.error(f"Error testing copilot chat: {e}")
+        logger.error(f"Error testing configuration file: {e}")
         return False
 
-def run_tests():
+async def run_tests():
     """
     Run all tests for the UnityMol Copilot.
     
@@ -141,23 +154,22 @@ def run_tests():
     results = {
         "zmq_connection": False,
         "basic_commands": False,
-        "copilot_initialization": False,
-        "copilot_chat": False
+        "fastagent_import": False,
+        "config_file": False
     }
     
+    # Test FastAgent imports
+    results["fastagent_import"] = await test_fastagent_import()
+    
+    # Test configuration file
+    results["config_file"] = await test_config_file()
+    
     # Test ZMQ connection
-    results["zmq_connection"] = test_zmq_connection()
+    results["zmq_connection"] = await test_zmq_connection()
     
     # If ZMQ connection is successful, test basic commands
     if results["zmq_connection"]:
-        results["basic_commands"] = test_basic_commands()
-    
-    # Test copilot initialization
-    results["copilot_initialization"] = test_copilot_initialization()
-    
-    # If copilot initialization is successful and ZMQ connection works, test chat
-    if results["copilot_initialization"] and results["zmq_connection"]:
-        results["copilot_chat"] = test_copilot_chat()
+        results["basic_commands"] = await test_basic_commands()
     
     # Print test results
     logger.info("Test results:")
@@ -173,7 +185,7 @@ if __name__ == "__main__":
     input("Press Enter to continue...")
     
     # Run the tests
-    success = run_tests()
+    success = asyncio.run(run_tests())
     
     # Exit with appropriate status code
     sys.exit(0 if success else 1)

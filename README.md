@@ -1,10 +1,8 @@
-"""
-UnityMol Copilot - README
+# UnityMol Copilot - README
 
 A natural language interface for UnityMol using FastAgent and Ollama.
-"""
 
-# UnityMol Copilot
+## Overview
 
 UnityMol Copilot is a natural language interface for UnityMol, allowing users to control the molecular visualization application through conversational commands. It uses the DeepSeek-Coder-V2 language model via Ollama to interpret user requests and generate appropriate UnityMol API calls.
 
@@ -13,7 +11,6 @@ UnityMol Copilot is a natural language interface for UnityMol, allowing users to
 - Natural language interface to UnityMol's API
 - Support for all UnityMol API functions
 - Conversational mode for direct interaction
-- Tool mode for integration with more complex agentic setups
 - Context-aware interactions that remember loaded structures and selections
 - Robust error handling and logging
 
@@ -34,10 +31,12 @@ UnityMol Copilot is a natural language interface for UnityMol, allowing users to
 
 2. Install the required Python packages:
    ```
-   pip install pyzmq mcp_agent
+   pip install pyzmq
    ```
 
-3. Clone or download this repository to your local machine.
+3. Make sure FastAgent is installed in your environment.
+
+4. Clone or download this repository to your local machine.
 
 ## Usage
 
@@ -45,9 +44,9 @@ UnityMol Copilot is a natural language interface for UnityMol, allowing users to
 
 Make sure UnityMol is running with its ZMQ server enabled. The default port is 5555.
 
-### Running in Conversational Mode
+### Running the Copilot
 
-To start the UnityMol Copilot in conversational mode:
+To start the UnityMol Copilot:
 
 ```
 python main.py --host localhost --port 5555 --model deepseek-coder-v2:16b
@@ -66,34 +65,6 @@ The structure has been successfully loaded. The result is "1CRN", which means th
 Would you like me to apply any specific visualization or representation to this structure?
 ```
 
-### Running in Tool Mode
-
-To start the UnityMol Copilot in tool mode for integration with other agents:
-
-```
-python main.py --tool-mode --host localhost --port 5555 --model deepseek-coder-v2:16b
-```
-
-In tool mode, you can send JSON messages to the copilot's stdin:
-
-```json
-{"text": "Load PDB file 1CRN"}
-```
-
-The copilot will respond with a JSON object containing the response, executed commands, and updated context:
-
-```json
-{
-  "response": "I've loaded the PDB file 1CRN for you...",
-  "commands": ["fetch(\"1CRN\")"],
-  "context": {
-    "loaded_structures": ["1CRN"],
-    "current_selections": [],
-    "last_commands": ["fetch(\"1CRN\")"]
-  }
-}
-```
-
 ## Testing
 
 To test the UnityMol Copilot functionality:
@@ -102,7 +73,7 @@ To test the UnityMol Copilot functionality:
 python test.py
 ```
 
-This will run a series of tests to verify the ZMQ connection, basic commands, copilot initialization, and chat functionality.
+This will run a series of tests to verify the ZMQ connection, basic commands, FastAgent imports, and configuration file.
 
 ## Architecture
 
@@ -111,8 +82,7 @@ The UnityMol Copilot consists of the following components:
 1. **UnityMolZMQ**: Handles communication with UnityMol through its ZMQ server
 2. **UnityMolCopilot**: Integrates FastAgent with the ZMQ communication layer
 3. **Main Script**: Provides a command-line interface to the UnityMol Copilot
-
-For more details, see the `architecture.md` file.
+4. **Configuration File**: YAML file for FastAgent configuration
 
 ## Example Commands
 
@@ -132,6 +102,10 @@ Here are some example commands you can try with the UnityMol Copilot:
 - The copilot requires UnityMol to be running with the ZMQ server enabled
 - Complex requests may require multiple interactions
 - The copilot's understanding is limited by the language model's capabilities
+
+## Troubleshooting
+
+If you encounter errors related to FastAgent compatibility, make sure you're using the latest version of FastAgent. This implementation uses the decorator-based approach with YAML configuration files as required by the current FastAgent API.
 
 ## License
 

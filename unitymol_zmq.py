@@ -21,7 +21,11 @@ class UnityMolZMQ:
     Class to handle ZMQ communication with UnityMol.
     """
     
-    def __init__(self, host="localhost", port=5555):
+    # Default connection settings
+    DEFAULT_HOST = "localhost"
+    DEFAULT_PORT = 5555
+    
+    def __init__(self, host=None, port=None):
         """
         Initialize the ZMQ connection to UnityMol.
         
@@ -29,8 +33,8 @@ class UnityMolZMQ:
             host (str): The host where UnityMol is running
             port (int): The port on which UnityMol's ZMQ server is listening
         """
-        self.host = host
-        self.port = port
+        self.host = host or self.DEFAULT_HOST
+        self.port = port or self.DEFAULT_PORT
         self.context = zmq.Context.instance()
         self.socket = None
         self.connected = False
@@ -135,13 +139,6 @@ if __name__ == "__main__":
             print(f"Selections: {result['result']}")
         else:
             print(f"Error: {result.get('stdout', 'Unknown error')}")
-            
-        # Example: Load a PDB file
-        # result = unitymol.send_command("load('/path/to/molecule.pdb')")
-        # if result['success']:
-        #     print(f"Loaded molecule: {result['result']}")
-        # else:
-        #     print(f"Error loading molecule: {result.get('stdout', 'Unknown error')}")
             
         # Disconnect when done
         unitymol.disconnect()
