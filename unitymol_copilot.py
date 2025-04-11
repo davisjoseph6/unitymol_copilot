@@ -26,8 +26,8 @@ fast = FastAgent("UnityMol Copilot")
 # Global UnityMolZMQ instance
 unitymol = None
 
-# Define function schema for execute_unitymol_command
-@fast.function
+# Define tool schema for execute_unitymol_command
+@fast.tool
 async def execute_unitymol_command(command: str) -> dict:
     """
     Execute a UnityMol API command and return the result.
@@ -59,8 +59,8 @@ async def execute_unitymol_command(command: str) -> dict:
             "command": command
         }
 
-# Define function schema for get_unitymol_api_info
-@fast.function
+# Define tool schema for get_unitymol_api_info
+@fast.tool
 async def get_unitymol_api_info() -> dict:
     """
     Get information about available UnityMol API commands.
@@ -114,7 +114,7 @@ async def get_unitymol_api_info() -> dict:
     3. Execute the API call(s) using the execute_unitymol_command function and interpret the results
     4. Provide a clear, helpful response to the user
 
-    Available functions:
+    Available tools:
     - execute_unitymol_command(command: str) -> dict: Execute UnityMol commands
     - get_unitymol_api_info() -> dict: Get information about available API commands
 
