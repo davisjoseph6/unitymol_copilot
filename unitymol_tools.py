@@ -1,31 +1,20 @@
-import zmq
-import json
-import asyncio
-from mcp.server.fastmcp import FastMCP
+from fast_agent.tools import tool
+from zmq_client import UnityMolZMQClient
 
-# Create an MCP server
-mcp = FastMCP("Pymol")
+client = UnityMolZMQClient()
 
-# Set up ZMQ context and socket
-ctx = zmq.Context.instance()
-socket = ctx.socket(zmq.REQ)
-socket.connect("tcp://localhost:5555")  # Port must match UnityMol config
+@tool
+def get_selection() -> str:
+    """Get the current molecular selection in UnityMol."""
+    return client.send_command("getSelectionListString()")
 
-def send_unitymol_command(command: str):
-    socket.send_string(command)
-    response = json.loads(socket.recv().decode())
-    if response.get("success", False):
-        return response["result"]
-    else:
-        raise RuntimeError(f"Command failed: {response.get('stdout', '')}")
-
-@mcp.tool()
-def get_selection_list() -> str:
-    """Get the current selection list from UnityMol."""
-    return send_unitymol_command("getSelectionListString()")
-
-@mcp.tool()
-def load_pdb(filename: str) -> str:
+@tool
+def load_pdb(file_path: str) -> str:
     """Load a PDB file in UnityMol."""
-    return send_unitymol_command(f"execScriptString('loadPDB(\"{filename}\")')")
+    return client.send_command(f'execScriptString("loadPDB(\\"{file_path}\\")")')
+
+@tool
+def color_chain(chain: str, color: str) -> str:
+    """Color a chain with a given color."""
+    return client.send_command(f'execScriptString("colorChain(\\"{chain}\\", \\"{color}\\")")')
 
