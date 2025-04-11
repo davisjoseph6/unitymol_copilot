@@ -2,21 +2,27 @@ import asyncio
 from mcp_agent.core.fastagent import FastAgent
 from unitymol_tools import get_selection_list, load_pdb
 
-agent = FastAgent(
-    name="UnityMolCopilot",
-    description="An intelligent assistant for molecular visualization in UnityMol.",
-    tools=[get_selection_list, load_pdb],
-    memory=True,
-    verbose=True
-)
+# Create the application
+fast = FastAgent("UnityMol Copilot")
 
-def main():
+# Define the agent
+@fast.agent(
+    name="unitymol_copilot",
+    instruction="You are a helpful AI agent for molecular visualization in UnityMol.",
+#    tools=[get_selection_list, load_pdb],
+#    memory=True,
+#    verbose=True
+    )
+
+
+
+async def main():
     print("🧬 UnityMol Copilot is running. Type your command:")
-    while True:
-        prompt = input("You: ")
-        result = agent.run(prompt)
-        print("Copilot:", result)
+    # use the --model command line switch or agent arguments to change model
+    async with fast.run() as agent:
+        await agent()
+
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
 
