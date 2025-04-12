@@ -5,12 +5,17 @@ This module integrates the UnityMol ZMQ communication with FastAgent to create
 a conversational interface for UnityMol.
 """
 
-import asyncio
+from mcp.server.fastmcp import FastMCP
+import os
+
+#import asyncio
 import logging
 import json
-from pathlib import Path
-from mcp_agent.core.fastagent import FastAgent
-from mcp_agent.core.prompt import Prompt
+#from pathlib import Path
+from typing import Dict, Any, Optional, Union
+
+#from mcp_agent.core.fastagent import FastAgent
+#from mcp_agent.core.prompt import Prompt
 from unitymol_zmq import UnityMolZMQ
 
 # Configure logging
@@ -20,14 +25,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger("UnityMolCopilot")
 
-# Create the FastAgent application
-fast = FastAgent("UnityMol Copilot")
+# Initialize FastMCP server
+mcp = FastMCP("unitymol-copilot")
+
+# # Create the FastAgent application
+# fast = FastAgent("UnityMol Copilot")
+
+# Reference to the agent instance (will be set later)
+#global agent
 
 # Global UnityMolZMQ instance
 unitymol = None
 
 # Define tool schema for execute_unitymol_command
-@fast.tool
+@mcp.tool()
 async def execute_unitymol_command(command: str) -> dict:
     """
     Execute a UnityMol API command and return the result.
@@ -60,7 +71,7 @@ async def execute_unitymol_command(command: str) -> dict:
         }
 
 # Define tool schema for get_unitymol_api_info
-@fast.tool
+@mcp.tool()
 async def get_unitymol_api_info() -> dict:
     """
     Get information about available UnityMol API commands.
@@ -101,33 +112,10 @@ async def get_unitymol_api_info() -> dict:
         ]
     }
 
-@fast.agent(
-    "unitymol_copilot",
-    instruction="""
-    You are an expert assistant for UnityMol, a molecular visualization application.
-    Your role is to help users interact with UnityMol by translating their natural language requests
-    into appropriate UnityMol API calls.
-
-    When responding to user requests:
-    1. Understand what the user wants to accomplish with UnityMol
-    2. Generate the appropriate UnityMol API call(s) to fulfill the request
-    3. Execute the API call(s) using the execute_unitymol_command function and interpret the results
-    4. Provide a clear, helpful response to the user
-
-    Available tools:
-    - execute_unitymol_command(command: str) -> dict: Execute UnityMol commands
-    - get_unitymol_api_info() -> dict: Get information about available API commands
-
-    Always format your UnityMol API calls exactly as they should be executed.
-    If you're unsure about a request, ask for clarification.
-    If a request requires multiple API calls, execute them in the appropriate sequence.
-
-    Keep track of loaded structures and selections to provide context-aware assistance.
+@mcp.tool()
+async def init_unitymol_copilot():
     """
-)
-async def main():
-    """
-    Main entry point for the UnityMol Copilot.
+    Initialization entry point for the UnityMol Copilot.
     """
     global unitymol
 
@@ -143,10 +131,4 @@ async def main():
     logger.info("Successfully connected to UnityMol")
     print("Successfully connected to UnityMol")
 
-    # Start interactive session
-    async with fast.run() as agent:
-        await agent.interactive()
-
-# Run the application
-if __name__ == "__main__":
-    asyncio.run(main())
+    return {"success": True, "message": f"Initialized UnityMol Copilot with ZMQ connection"}

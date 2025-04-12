@@ -1,9 +1,15 @@
 # UnityMol Copilot Configuration
 
+default_model: generic.qwen2.5-coder:14b
+#default_model: generic.llama3.2:latest
+#default_model: generic.mistral:7b
+#default_model: generic.deepseek-coder-v2:16b
+#  model: deepseek-coder-v2:16b
+
 # LLM configuration
 llm:
   provider: ollama
-  model: deepseek-coder-v2:16b
+  model: generic.qwen2.5-coder:14b
   parameters:
     temperature: 0.7
     top_p: 0.9
