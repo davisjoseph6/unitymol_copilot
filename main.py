@@ -41,7 +41,7 @@ def main():
         UnityMolZMQ.DEFAULT_PORT = args.port
         
         # Import and run the copilot
-        from unitymol_copilot import main as copilot_main
+        from mcp_server import main as copilot_main
         asyncio.run(copilot_main())
         
     except Exception as e:

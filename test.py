@@ -154,7 +154,7 @@ async def test_function_registration():
         # Load the unitymol_copilot module
         spec = importlib.util.spec_from_file_location(
             "unitymol_copilot", 
-            Path(__file__).parent / "unitymol_copilot.py"
+            Path(__file__).parent / "mcp_server.py"
         )
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
