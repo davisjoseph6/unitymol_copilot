@@ -1,108 +1,99 @@
+import rdflib
+import re
 import json
 
-# Simple ontology for mapping terms to categories and canonical UnityMol targets
-ONTOLOGY = {
-    "protein": {"type": "molecule", "canonical": "protein"},
-    "ligand": {"type": "molecule", "canonical": "ligand"},
-    "solvent": {"type": "molecule", "canonical": "solvent"},
-    "water": {"type": "molecule", "canonical": "water"}
-}
+# Load ontology
+graph = rdflib.Graph()
+graph.parse("ontology.ttl", format="turtle")
 
-# Synonyms for targets
-SYNONYMS = {
-    "macromolecule": "protein",
+# Map synonyms to canonical entities from ontology
+synonyms = {
+    "protein": "protein",
+    "ligand": "ligand",
     "substrate": "ligand",
-    "liquid": "solvent"
+    "water": "water",
+    "solvent": "solvent"
 }
 
-# Simple action mapping
-ACTIONS = {
-    "color": "color",
-    "paint": "color",
-    "highlight": "color",
-    "center": "center",
-    "focus": "center",
-    "hide": "hide",
-    "show": "show"
+action_map = {
+    "color": ["color", "paint", "highlight"],
+    "center": ["focus", "center"],
+    "hide": ["hide"]
 }
 
-def map_synonym(word):
-    return SYNONYMS.get(word, word)
+# Invert action map for lookup
+action_lookup = {v: k for k, lst in action_map.items() for v in lst}
 
-def validate_target(word):
-    return map_synonym(word) in ONTOLOGY
+def is_valid_target(entity):
+    q = f"""
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    ASK {{
+        ?s rdfs:label "{entity}"@en .
+    }}
+    """
+    return bool(graph.query(q))
 
-def get_canonical_target(word):
-    return ONTOLOGY[map_synonym(word)]["canonical"] if validate_target(word) else None
+def parse_command(input_text):
+    input_text = input_text.strip().lower()
 
-def parse_input(text):
-    words = text.lower().split()
-    action = None
-    color = None
-    target = None
+    # Match basic pattern: action + object + optional color
+    color_match = re.match(r"(\\w+) the (\\w+) in (\\w+)", input_text)
+    focus_match = re.match(r"(focus|center) on the (\\w+)", input_text)
+    hide_match = re.match(r"hide the (\\w+)", input_text)
 
-    # Identify the action
-    for word in words:
-        if word in ACTIONS:
-            action = ACTIONS[word]
-            break
+    if color_match:
+        verb, obj, color = color_match.groups()
+        action = action_lookup.get(verb)
+        target = synonyms.get(obj, obj)
+        if action and is_valid_target(target):
+            return json.dumps({"action": action, "target": obj, "color": color})
+    elif focus_match:
+        _, obj = focus_match.groups()
+        action = "center"
+        target = synonyms.get(obj, obj)
+        if is_valid_target(target):
+            return json.dumps({"action": action, "target": obj})
+    elif hide_match:
+        obj = hide_match.group(1)
+        action = "hide"
+        target = synonyms.get(obj, obj)
+        if is_valid_target(target):
+            return json.dumps({"action": action, "target": obj})
 
-    # Identify color (simple heuristic: check against known color names)
-    known_colors = ["red", "blue", "green", "yellow", "orange", "purple", "white", "black"]
-    for word in words:
-        if word in known_colors:
-            color = word
-            break
+    return json.dumps({"error": "Could not parse input"})
 
-    # Identify target based on ontology
-    for word in words:
-        candidate = map_synonym(word)
-        if candidate in ONTOLOGY:
-            target = ONTOLOGY[candidate]["canonical"]
-            break
+def to_ironpython(parsed_json):
+    try:
+        cmd = json.loads(parsed_json)
+        if "error" in cmd:
+            return f"# Unrecognized structured command: {cmd}"
+        action = cmd["action"]
+        target = cmd["target"]
+        if action == "color":
+            return f'cmds.colorSelection("{cmd["color"]}", selection="{target}")'
+        elif action == "center":
+            return f'cmds.center(selection="{target}")'
+        elif action == "hide":
+            return f'cmds.setVisibility("{target}", visible=False)'
+    except Exception as e:
+        return f"# Error interpreting structured command: {e}"
 
-    # Validation and reasoning
-    if not action:
-        return {"error": "No recognized action in input"}
-    if not target:
-        return {"error": "No recognized or ontologically valid target in input"}
+    return "# Could not convert structured command"
 
-    result = {"action": action, "target": target}
-    if color:
-        result["color"] = color
-    return result
+# Tests
+examples = [
+    "color the protein in blue",
+    "paint the ligand in red",
+    "focus on the water",
+    "hide the solvent",
+    "highlight the protein in green"
+]
 
-def to_ironpython(parsed):
-    if "error" in parsed:
-        return f"# Unrecognized structured command: {parsed}"
-
-    action = parsed["action"]
-    target = parsed["target"]
-
-    if action == "color" and "color" in parsed:
-        return f'cmds.colorSelection("{parsed["color"]}", selection="{target}")'
-    elif action == "center":
-        return f'cmds.center(selection="{target}")'
-    elif action == "hide":
-        return f'cmds.hide(selection="{target}")'
-    elif action == "show":
-        return f'cmds.show(selection="{target}")'
-    else:
-        return f"# Unsupported structured command: {parsed}"
-
-if __name__ == '__main__':
-    test_inputs = [
-        "color the protein in blue",
-        "paint the ligand in red",
-        "focus on the water",
-        "hide the solvent",
-        "highlight the protein in green"
-    ]
-
-    for line in test_inputs:
-        print(f"Input: {line}")
-        structured = parse_input(line)
-        print("→ Structured JSON:", json.dumps(structured))
-        print("→ IronPython:", to_ironpython(structured))
-        print("-")
+for ex in examples:
+    structured = parse_command(ex)
+    iron = to_ironpython(structured)
+    print("Input:", ex)
+    print("→ Structured JSON:", structured)
+    print("→ IronPython:", iron)
+    print("-")
 

@@ -1,0 +1,61 @@
+@prefix : <http://unitymol.org/ontology#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+
+# Classe de base
+:Entity rdf:type owl:Class .
+
+# Catégories principales
+:Molecule rdf:type owl:Class ;
+         rdfs:subClassOf :Entity ;
+         rdfs:label "molecule" .
+
+:Protein rdf:type owl:Class ;
+         rdfs:subClassOf :Molecule ;
+         rdfs:label "protein", "polypeptide" .
+
+:Ligand rdf:type owl:Class ;
+        rdfs:subClassOf :Molecule ;
+        rdfs:label "ligand", "substrate", "inhibitor", "drug" .
+
+:Solvent rdf:type owl:Class ;
+         rdfs:subClassOf :Molecule ;
+         rdfs:label "solvent", "water", "h2o" .
+
+# Actions possibles
+:Action rdf:type owl:Class .
+
+:Color rdf:type owl:Class ;
+       rdfs:subClassOf :Action ;
+       rdfs:label "color", "paint", "highlight" .
+
+:Hide rdf:type owl:Class ;
+      rdfs:subClassOf :Action ;
+      rdfs:label "hide", "remove", "conceal" .
+
+:Center rdf:type owl:Class ;
+        rdfs:subClassOf :Action ;
+        rdfs:label "center", "focus", "zoom in" .
+
+# Couleurs connues
+:ColorValue rdf:type owl:Class .
+
+:Red rdf:type :ColorValue ;
+     rdfs:label "red", "rouge" .
+
+:Blue rdf:type :ColorValue ;
+      rdfs:label "blue", "bleu" .
+
+:Green rdf:type :ColorValue ;
+       rdfs:label "green", "vert" .
+
+# Mappage symbolique
+:hasColor rdf:type owl:ObjectProperty ;
+          rdfs:domain :Entity ;
+          rdfs:range :ColorValue .
+
+:hasAction rdf:type owl:ObjectProperty ;
+           rdfs:domain :Entity ;
+           rdfs:range :Action .
+
