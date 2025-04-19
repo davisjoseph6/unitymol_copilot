@@ -1,10 +1,12 @@
 import rdflib
+from rdflib import Graph
 import re
 import json
 
 # Load ontology
-graph = rdflib.Graph()
+graph = Graph()
 graph.parse("ontology.ttl", format="turtle")
+print(f"Graph has {len(graph)} statements.")
 
 # Map synonyms to canonical entities from ontology
 synonyms = {
@@ -35,25 +37,29 @@ def is_valid_target(entity):
 
 def parse_command(input_text):
     input_text = input_text.strip().lower()
-
+    print(f"parsing {input_text}")
+    
     # Match basic pattern: action + object + optional color
     color_match = re.match(r"(\\w+) the (\\w+) in (\\w+)", input_text)
     focus_match = re.match(r"(focus|center) on the (\\w+)", input_text)
     hide_match = re.match(r"hide the (\\w+)", input_text)
 
     if color_match:
+        print(f"Color matched {color_match}")
         verb, obj, color = color_match.groups()
         action = action_lookup.get(verb)
         target = synonyms.get(obj, obj)
         if action and is_valid_target(target):
             return json.dumps({"action": action, "target": obj, "color": color})
     elif focus_match:
+        print(f"Focus matched {focus_match}")
         _, obj = focus_match.groups()
         action = "center"
         target = synonyms.get(obj, obj)
         if is_valid_target(target):
             return json.dumps({"action": action, "target": obj})
     elif hide_match:
+        print(f"Hide matched {hide_match}")
         obj = hide_match.group(1)
         action = "hide"
         target = synonyms.get(obj, obj)
@@ -88,6 +94,13 @@ examples = [
     "hide the solvent",
     "highlight the protein in green"
 ]
+
+qres = graph.query("""
+    ASK {
+        ?s rdfs:label "protein"@en .
+    }
+""")
+print(bool(qres))
 
 for ex in examples:
     structured = parse_command(ex)
