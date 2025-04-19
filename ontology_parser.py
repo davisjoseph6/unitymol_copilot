@@ -2,6 +2,7 @@
 
 # Simple parser with ontology-driven reasoning and command mapping
 import json
+import re
 
 # --- Ontology: Basic RDF-style triples (subject, predicate, object) ---
 ONTOLOGY = [
@@ -10,6 +11,8 @@ ONTOLOGY = [
     ("water", "is_a", "solvent"),
     ("solvent", "is_a", "molecule"),
     ("blue", "is_a", "color"),
+    ("red", "is_a", "color"),
+    ("green", "is_a", "color"),
     ("hide", "is_a", "action"),
     ("show", "is_a", "action"),
     ("color", "is_a", "action"),
@@ -19,14 +22,18 @@ ONTOLOGY = [
     ("focus", "same_as", "center"),
 ]
 
-# Simple reasoning helper
+# Simple reasoning helpers
 def resolve_term(term):
     for s, p, o in ONTOLOGY:
         if s == term and p == "same_as":
             return o
     return term
 
-# Get type/class of a subject
+def normalize_subject(term):
+    term = term.strip().lower()
+    term = re.sub(r"^(the|a|an) ", "", term)
+    return resolve_term(term)
+
 def get_class(term):
     for s, p, o in ONTOLOGY:
         if s == term and p == "is_a":
@@ -34,55 +41,56 @@ def get_class(term):
     return None
 
 # --- Main parser ---
-def parse_command(cmd):
-    if isinstance(cmd, str):
-        if cmd.startswith("setColor"):
-            parts = cmd[9:-1].split(",")
-            target = parts[0].strip().strip("\"'")
-            color = parts[1].strip().strip("\"'")
+def parse_command(cmd_json):
+    if isinstance(cmd_json, dict):
+        action = cmd_json.get("action")
+        target = cmd_json.get("target")
+        color = cmd_json.get("color")
+
+        if action == "color" and target and color:
             return f'cmds.colorSelection("{color}", selection="{target}")'
 
-        elif cmd.startswith("centerOn"):
-            target = cmd[9:-1].strip().strip("\"'")
+        elif action == "center" and target:
             return f'cmds.center(selection="{target}")'
 
-        elif cmd.startswith("hide"):
-            target = cmd[5:-1].strip().strip("\"'")
+        elif action == "hide" and target:
             return f'cmds.setVisibility(selection="{target}", visible=False)'
 
-        elif cmd.startswith("show"):
-            target = cmd[5:-1].strip().strip("\"'")
+        elif action == "show" and target:
             return f'cmds.setVisibility(selection="{target}", visible=True)'
 
-    return f"# Unrecognized command: {cmd}"
+    return f"# Unrecognized structured command: {cmd_json}"
 
-# --- Natural Language to Structured Command (simplified) ---
+# --- Natural Language to Structured JSON Command ---
 def nl_to_structured_command(nl):
     nl = nl.lower()
     for synonym, _, canonical in ONTOLOGY:
         if synonym in nl:
             nl = nl.replace(synonym, canonical)
 
-    if "color" in nl:
-        parts = nl.split("color")[-1].strip().split(" in ")
-        if len(parts) == 2:
-            target = parts[0].strip()
-            color = parts[1].strip()
-            return f'setColor("{target}", "{color}")'
+    # Match color commands
+    match = re.search(r'(color|paint|highlight) (.+?) in (\w+)', nl)
+    if match:
+        action = resolve_term(match.group(1))
+        target = normalize_subject(match.group(2))
+        color = match.group(3).strip()
+        return {"action": action, "target": target, "color": color}
 
-    elif "center on" in nl:
-        target = nl.split("center on")[-1].strip()
-        return f'centerOn("{target}")'
+    # Match center/focus commands
+    match = re.search(r'(center|focus) on (.+)', nl)
+    if match:
+        action = resolve_term(match.group(1))
+        target = normalize_subject(match.group(2))
+        return {"action": action, "target": target}
 
-    elif "hide" in nl:
-        target = nl.split("hide")[-1].strip()
-        return f'hide("{target}")'
+    # Match hide/show commands
+    match = re.search(r'(hide|show) (.+)', nl)
+    if match:
+        action = resolve_term(match.group(1))
+        target = normalize_subject(match.group(2))
+        return {"action": action, "target": target}
 
-    elif "show" in nl:
-        target = nl.split("show")[-1].strip()
-        return f'show("{target}")'
-
-    return "# Could not parse input"
+    return {"error": "Could not parse input"}
 
 # --- Test area ---
 if __name__ == "__main__":
@@ -97,7 +105,7 @@ if __name__ == "__main__":
     for test in tests:
         structured = nl_to_structured_command(test)
         print(f"Input: {test}")
-        print(f"→ Structured: {structured}")
+        print(f"→ Structured JSON: {json.dumps(structured)}")
         print(f"→ IronPython: {parse_command(structured)}")
         print("-")
 
