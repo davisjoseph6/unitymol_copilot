@@ -11,6 +11,7 @@ import os
 import sys
 from pathlib import Path
 
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -41,8 +42,9 @@ def main():
         UnityMolZMQ.DEFAULT_PORT = args.port
         
         # Import and run the copilot
-        from mcp_server import main as copilot_main
-        asyncio.run(copilot_main())
+        from mcp_server import main_sync as copilot_main
+        exit_code = copilot_main()
+        return exit_code
         
     except Exception as e:
         logger.error(f"Error in main: {e}")
