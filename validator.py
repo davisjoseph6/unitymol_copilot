@@ -2,7 +2,7 @@ import re
 from lark import Lark, Transformer, v_args
 
 GRAMMAR = r"""
-start: stmt (( ";" | NEWLINE ) stmt)* ( ";" | NEWLINE )?
+start: stmt+
 
 ?stmt: add_structure
      | select_stmt
@@ -27,21 +27,23 @@ hide_stmt     : "hide" "(" "sel" "=" ESCAPED_STRING ")"
 color_by_chain_stmt : "color_by_chain" "(" "sel" "=" ESCAPED_STRING "," "target" "=" ESCAPED_STRING ")"
 
 %import common.ESCAPED_STRING
-%import common.NEWLINE
 %import common.WS_INLINE
+%import common.NEWLINE
+SEMI: ";"
+
 %ignore WS_INLINE
+%ignore NEWLINE
+%ignore SEMI
 """
 
 _parser = Lark(GRAMMAR, start="start", maybe_placeholders=False)
 
 def _unq(tok):
-    # tok is an ESCAPED_STRING like '"abc"'
-    s = str(tok)
+    s = str(tok)     # ESCAPED_STRING like '"abc"'
     return s[1:-1]
 
 @v_args(inline=True)
 class BuildAST(Transformer):
-    # collect all stmts as a list
     def start(self, *stmts):
         return list(stmts)
 
@@ -79,11 +81,9 @@ def parse_and_validate_molcommand(program: str):
     Parse a molcommand script and return (ok: bool, ast: list[dict] | None, errors: list[str]).
     """
     try:
-        # trailing separator optional; no need to force newline
         tree = _parser.parse(program)
-        ast = BuildAST().transform(tree)   # -> list[dict]
+        ast = BuildAST().transform(tree)   # list[dict]
 
-        # ---- semantic checks ----
         errors = []
         allowed_color_targets = {"atom", "bond", "cartoon", "surface", "point", "tube", "line"}
 
@@ -92,7 +92,7 @@ def parse_and_validate_molcommand(program: str):
             args = node.get("args", {})
 
             if stmt == "add_structure":
-                has_pdb = "PDBID" in args
+                has_pdb  = "PDBID" in args
                 has_file = "filePath" in args
                 if has_pdb == has_file:
                     errors.append("add_structure requires exactly one of PDBID or filePath")
@@ -104,7 +104,7 @@ def parse_and_validate_molcommand(program: str):
                     errors.append("filePath must be non-empty")
 
             elif stmt == "select":
-                q = args.get("query", "").strip()
+                q    = args.get("query", "").strip()
                 name = args.get("name", "").strip()
                 if not q:
                     errors.append("select.query must be non-empty")
