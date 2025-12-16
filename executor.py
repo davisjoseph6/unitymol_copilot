@@ -1,3 +1,6 @@
+import re
+from pathlib import Path
+
 def _esc(s: str) -> str:
     # Escape for inclusion inside double-quoted UnityMol command strings
     return s.replace("\\", "\\\\").replace('"', '\\"')
@@ -20,11 +23,18 @@ def dsl_to_zmq_calls(ast):
             if "PDBID" in a:
                 pdbid = a["PDBID"].lower()
                 cmds.append(f'fetch("{_esc(pdbid)}")')
+
+                sel = f"all_{pdbid}"
+                cmds.append(f'select("all", "{_esc(sel)}", True, False, True)')
+
             elif "filePath" in a:
                 path = _norm_path(a["filePath"])
                 cmds.append(f'load("{_esc(path)}")')
-            else:
-                raise ValueError("add_structure requires PDBID or filePath")
+
+                stem = Path(path).stem.lower()
+                if re.fullmatch(r"[0-9][a-z0-9]{3}", stem):
+                    sel = f"all_{stem}"
+                    cmds.append(f'select("all", "{_esc(sel)}", True, False, True)')
 
         elif s == "select":
             query = _esc(a["query"])
@@ -51,4 +61,3 @@ def dsl_to_zmq_calls(ast):
             raise NotImplementedError(s)
 
     return cmds
-
