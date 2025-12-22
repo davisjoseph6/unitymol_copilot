@@ -4,8 +4,8 @@ unitymol_copilot.executor
 Map a validated DSL AST to a list of UnityMol ZMQ command strings.
 
 Dev QoL:
-- After add_structure, ensure a stable selection named "all" exists.
-- Also create a convenience selection all_<pdbid> when we can infer it.
+- After add_structure, create a convenience named selection all_<pdbid> when we can infer it.
+- We intentionally do NOT create a named selection called "all" (reserved keyword).
 """
 
 import re
@@ -37,9 +37,6 @@ def dsl_to_zmq_calls(ast):
                 pdbid = a["PDBID"].lower()
                 cmds.append(f'fetch("{_esc(pdbid)}")')
 
-                # Ensure a stable "all" selection exists (used by generic commands).
-                cmds.append('select("all", "all", True, False, True)')
-
                 # Convenience selection for this structure.
                 sel = f"all_{pdbid}"
                 cmds.append(f'select("all", "{_esc(sel)}", True, False, True)')
@@ -47,9 +44,6 @@ def dsl_to_zmq_calls(ast):
             elif "filePath" in a:
                 path = _norm_path(a["filePath"])
                 cmds.append(f'load("{_esc(path)}")')
-
-                # Ensure a stable "all" selection exists (used by generic commands).
-                cmds.append('select("all", "all", True, False, True)')
 
                 # Convenience selection if filename stem looks like a PDB id.
                 stem = Path(path).stem.lower()
