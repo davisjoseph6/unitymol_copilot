@@ -37,11 +37,18 @@ from typing import Dict, Tuple
 # Include known "LLM-ish" alias verbs here so DEV_LOOSE doesn't drop them.
 # We'll rewrite them back to strict verbs later.
 _VERBS = (
+    # Core MolCommandNL / UnityMol verbs
     "add_structure",
     "select",
     "show",
     "hide",
     "color_by_chain",
+    "update_representation",
+    "update_coloring",
+    "center",
+    "rotate",
+    "annotate",
+    "measure",
     # alias verbs observed from the model:
     "add_coloring",
     "add_color_command",
@@ -149,6 +156,9 @@ def normalize_dsl(text: str, *, dev: bool | None = None) -> Tuple[str, Dict]:
         # Normalize targets/plurals
         t = _normalize_color_by_chain_target_aliases(t, info)
 
+        # Fix sel="all_lines"/"all_surface"/"all_tube"/etc (rep-like sel) when target is present
+        t = _normalize_color_by_chain_sel_repname(t, info)
+
         # Infer missing target if model encoded it in sel (single-arg form)
         t = _normalize_color_by_chain_single_arg(t, info)
 
@@ -231,7 +241,8 @@ def _canonicalize_call_verb(s: str, info: Dict) -> str:
 
     fn_raw = m.group(1)
     fn = fn_raw.lower()
-    if fn in _VERBS and fn_raw != fn:
+    if fn in _VERBS and fn_raw.lower() != fn_raw:
+        # Only record when we actually changed case
         s = fn + s[len(fn_raw) :]
         info["steps"].append("verb_lowercase_call")
 
@@ -300,41 +311,75 @@ def _rewrite_color_by_chain_alias_verbs(s: str, info: Dict) -> str:
 
       add_coloring(target="tube", sel="all")      -> color_by_chain(sel="all", target="tube")
       add_color_command(target="atom", sel="all") -> color_by_chain(sel="all", target="atom")
+      add_color_by_chain(target="line", sel="x")  -> color_by_chain(sel="x", target="line")
       colorByChain("all_1crn", "surface")         -> color_by_chain(sel="all_1crn", target="surface")
+      colorByChain(sel="all_1crn", target="surface") -> color_by_chain(sel="all_1crn", target="surface")
 
-    Also handles missing sel/target conservatively:
-      add_coloring(target="tube") -> color_by_chain(sel="all", target="tube")
-      add_coloring(sel="tube")    -> color_by_chain(sel="tube")  (then single-arg inference can kick in)
+    Conservative handling:
+      - If only target is present -> default sel="all"
+      - If only sel is present    -> emit color_by_chain(sel="...") (single-arg inference may kick in)
     """
     orig = s
     t = s.strip()
 
-    # camelCase helper: colorByChain("SEL","TARGET")
-    m = re.fullmatch(r'colorbychain\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\)\s*', t, flags=re.I)
+    # --- camelCase: colorByChain(...) ---
+    m = re.fullmatch(r"colorbychain\(\s*(.*?)\s*\)\s*", t, flags=re.I | re.S)
     if m:
-        sel, target = m.group(1), m.group(2)
-        s2 = f'color_by_chain(sel="{sel}", target="{target}")'
-        if s2 != orig:
-            info["steps"].append("rewrite_color_alias_verb")
-        return s2
+        inner = m.group(1).strip()
 
-    # alias verbs with kw-args or positional args
-    m = re.fullmatch(r'(add_coloring|add_color_command|add_color_by_chain)\(\s*(.*?)\s*\)\s*', t, flags=re.I)
+        # positional: "SEL","TARGET"
+        mpos = re.fullmatch(r'"([^"]+)"\s*,\s*"([^"]+)"', inner)
+        if mpos:
+            sel, target = mpos.group(1), mpos.group(2)
+            s2 = f'color_by_chain(sel="{sel}", target="{target}")'
+            if s2 != orig:
+                info["steps"].append("rewrite_color_alias_verb")
+            return s2
+
+        # kwargs: sel="...", target="..." (or rep="...")
+        sel_m = re.search(r'sel\s*=\s*"([^"]+)"', inner)
+        tgt_m = re.search(r'target\s*=\s*"([^"]+)"', inner)
+        if not tgt_m:
+            tgt_m = re.search(r'rep\s*=\s*"([^"]+)"', inner)
+
+        sel = sel_m.group(1) if sel_m else None
+        target = tgt_m.group(1) if tgt_m else None
+
+        if target and not sel:
+            s2 = f'color_by_chain(sel="all", target="{target}")'
+            info["steps"].append("rewrite_color_alias_verb")
+            return s2
+        if sel and not target:
+            s2 = f'color_by_chain(sel="{sel}")'
+            info["steps"].append("rewrite_color_alias_verb")
+            return s2
+        if sel and target:
+            s2 = f'color_by_chain(sel="{sel}", target="{target}")'
+            info["steps"].append("rewrite_color_alias_verb")
+            return s2
+
+        return s
+
+    # --- alias verbs with kw-args or positional args ---
+    m = re.fullmatch(
+        r"(add_coloring|add_color_command|add_color_by_chain)\(\s*(.*?)\s*\)\s*",
+        t,
+        flags=re.I | re.S,
+    )
     if not m:
         return s
 
-    inner = m.group(2)
+    inner = m.group(2).strip()
 
+    # Try kwargs first
     sel_m = re.search(r'sel\s*=\s*"([^"]+)"', inner)
     tgt_m = re.search(r'target\s*=\s*"([^"]+)"', inner)
-
-    # sometimes "rep" is used instead of "target"
     if not tgt_m:
         tgt_m = re.search(r'rep\s*=\s*"([^"]+)"', inner)
 
-    # positional: ("SEL","TARGET")
+    # positional: "SEL","TARGET"
     if not (sel_m or tgt_m):
-        m2 = re.fullmatch(r'"([^"]+)"\s*,\s*"([^"]+)"', inner.strip())
+        m2 = re.fullmatch(r'"([^"]+)"\s*,\s*"([^"]+)"', inner)
         if m2:
             sel, target = m2.group(1), m2.group(2)
             s2 = f'color_by_chain(sel="{sel}", target="{target}")'
@@ -388,12 +433,60 @@ def _normalize_color_by_chain_target_aliases(s: str, info: Dict) -> str:
     return s2
 
 
+def _normalize_color_by_chain_sel_repname(s: str, info: Dict) -> str:
+    """
+    Fix common slip where sel accidentally becomes a representation-like token:
+
+      color_by_chain(sel="all_lines", target="line")     -> color_by_chain(sel="all", target="line")
+      color_by_chain(sel="all_surface", target="surface")-> color_by_chain(sel="all", target="surface")
+      color_by_chain(sel="lines", target="line")         -> color_by_chain(sel="all", target="line")
+      color_by_chain(sel="atoms", target="atom")         -> color_by_chain(sel="all", target="atom")
+
+    IMPORTANT:
+    - We only do this when target is present.
+    - We do NOT touch sel="all_1crn" (true structure selection).
+    """
+    if not s.lower().startswith("color_by_chain("):
+        return s
+
+    orig = s
+
+    m_sel = re.search(r'sel\s*=\s*"([^"]+)"', s)
+    m_tgt = re.search(r'target\s*=\s*"([^"]+)"', s)
+    if not (m_sel and m_tgt):
+        return s
+
+    sel_raw = m_sel.group(1).strip()
+    sel_l = sel_raw.lower()
+
+    # If it's a legit structure selection (all_<4chars>), keep it.
+    if re.fullmatch(r"all_[0-9a-z]{4}", sel_l):
+        return s
+
+    # Normalize possible "all_<rep>" patterns and bare rep tokens.
+    candidate = sel_l
+    if candidate.startswith("all_"):
+        candidate = candidate[4:]
+    candidate = _COLOR_TARGET_ALIASES.get(candidate, candidate)
+
+    if candidate not in _COLOR_TARGETS:
+        return s
+
+    # Rewrite sel -> "all"
+    s2 = re.sub(r'sel\s*=\s*"([^"]+)"', 'sel="all"', s)
+    if s2 != orig:
+        info["steps"].append("color_by_chain_sel_repname")
+    return s2
+
+
 def _normalize_color_by_chain_single_arg(s: str, info: Dict) -> str:
     """
-    color_by_chain(sel="all_cartoon") -> color_by_chain(sel="all", target="cartoon")
-    color_by_chain(sel="cartoon")     -> color_by_chain(sel="all", target="cartoon")
-    color_by_chain(sel="all_lines")   -> color_by_chain(sel="all", target="line")
-    color_by_chain(sel="all_tube")    -> color_by_chain(sel="all", target="tube")
+    If the model encodes the target in sel (single-arg form), infer target:
+
+      color_by_chain(sel="all_cartoon") -> color_by_chain(sel="all", target="cartoon")
+      color_by_chain(sel="cartoon")     -> color_by_chain(sel="all", target="cartoon")
+      color_by_chain(sel="all_lines")   -> color_by_chain(sel="all", target="line")
+      color_by_chain(sel="all_tube")    -> color_by_chain(sel="all", target="tube")
 
     NOTE: We intentionally default sel="all" here; your REPL rewrites sel="all"
     to last_all_sel (all_<code>) for execution correctness.
@@ -404,12 +497,9 @@ def _normalize_color_by_chain_single_arg(s: str, info: Dict) -> str:
         return s
 
     raw = m.group(1).strip().lower()
-    if raw.startswith("all_"):
-        candidate = raw[4:]
-    else:
-        candidate = raw
-
+    candidate = raw[4:] if raw.startswith("all_") else raw
     candidate = _COLOR_TARGET_ALIASES.get(candidate, candidate)
+
     if candidate not in _COLOR_TARGETS:
         return s
 
