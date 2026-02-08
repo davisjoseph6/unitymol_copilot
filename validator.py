@@ -1,3 +1,23 @@
+#!/usr/bin/env python3
+"""
+unitymol_copilot.validator
+
+Strict molcommand DSL grammar + validation.
+
+Step 2 requirement:
+- Support color statements in the DSL so robust coloring can be exercised through:
+    color(sel="all_1crn", rep="cartoon", color="red")
+  or
+    color_selection(sel="all_1crn", rep="c", color="red")
+
+Notes:
+- We validate structure IDs, selection names, and rep targets (friendly names + codes).
+- We do not over-validate color strings; they are forwarded to the server which
+  tries multiple encodings (string name then UnityEngine.Color fallback).
+"""
+
+from __future__ import annotations
+
 import re
 from lark import Lark, Transformer, v_args
 
@@ -9,6 +29,8 @@ start: stmt+
      | show_stmt
      | hide_stmt
      | color_by_chain_stmt
+     | color_stmt
+     | color_selection_stmt
 
 # ---- add_structure ----
 add_structure : "add_structure" "(" add_args ")"
@@ -26,6 +48,10 @@ hide_stmt     : "hide" "(" "sel" "=" ESCAPED_STRING ")"
 # ---- color_by_chain ----
 color_by_chain_stmt : "color_by_chain" "(" "sel" "=" ESCAPED_STRING "," "target" "=" ESCAPED_STRING ")"
 
+# ---- Step 2: color (robust) ----
+color_stmt : "color" "(" "sel" "=" ESCAPED_STRING "," "rep" "=" ESCAPED_STRING "," "color" "=" ESCAPED_STRING ")"
+color_selection_stmt : "color_selection" "(" "sel" "=" ESCAPED_STRING "," "rep" "=" ESCAPED_STRING "," "color" "=" ESCAPED_STRING ")"
+
 %import common.ESCAPED_STRING
 %import common.WS_INLINE
 %import common.NEWLINE
@@ -38,9 +64,12 @@ SEMI: ";"
 
 _parser = Lark(GRAMMAR, start="start", maybe_placeholders=False)
 
-def _unq(tok):
-    s = str(tok)     # ESCAPED_STRING like '"abc"'
+
+def _unq(tok) -> str:
+    """Unquote a Lark ESCAPED_STRING token into a raw python string."""
+    s = str(tok)  # ESCAPED_STRING like '"abc"'
     return s[1:-1]
+
 
 @v_args(inline=True)
 class BuildAST(Transformer):
@@ -76,23 +105,42 @@ class BuildAST(Transformer):
     def color_by_chain_stmt(self, sel, target):
         return {"stmt": "color_by_chain", "args": {"sel": _unq(sel), "target": _unq(target)}}
 
+    # --- Step 2: color ---
+    def color_stmt(self, sel, rep, col):
+        return {"stmt": "color", "args": {"sel": _unq(sel), "rep": _unq(rep), "color": _unq(col)}}
+
+    def color_selection_stmt(self, sel, rep, col):
+        return {"stmt": "color_selection", "args": {"sel": _unq(sel), "rep": _unq(rep), "color": _unq(col)}}
+
+
 def parse_and_validate_molcommand(program: str):
     """
     Parse a molcommand script and return (ok: bool, ast: list[dict] | None, errors: list[str]).
     """
     try:
         tree = _parser.parse(program)
-        ast = BuildAST().transform(tree)   # list[dict]
+        ast = BuildAST().transform(tree)  # list[dict]
 
         errors = []
-        allowed_color_targets = {"atom", "bond", "cartoon", "surface", "point", "tube", "line"}
+
+        # Friendly rep names + common codes
+        allowed_rep_targets = {
+            # friendly
+            "cartoon", "hyperball", "line", "lines", "surface", "trace", "points",
+            # codes
+            "c", "hb", "l", "s", "p", "trace",
+            # allow some additional UnityMol-ish strings that appear in builds
+            "sphere", "bondorder", "hbond", "hbondtubes",
+            # for color_by_chain in your earlier validator style:
+            "atom", "bond", "tube", "point",
+        }
 
         for node in ast:
             stmt = node.get("stmt")
             args = node.get("args", {})
 
             if stmt == "add_structure":
-                has_pdb  = "PDBID" in args
+                has_pdb = "PDBID" in args
                 has_file = "filePath" in args
                 if has_pdb == has_file:
                     errors.append("add_structure requires exactly one of PDBID or filePath")
@@ -104,7 +152,7 @@ def parse_and_validate_molcommand(program: str):
                     errors.append("filePath must be non-empty")
 
             elif stmt == "select":
-                q    = args.get("query", "").strip()
+                q = args.get("query", "").strip()
                 name = args.get("name", "").strip()
                 if not q:
                     errors.append("select.query must be non-empty")
@@ -116,7 +164,8 @@ def parse_and_validate_molcommand(program: str):
             elif stmt == "show":
                 if not args.get("sel", "").strip():
                     errors.append("show.sel must be non-empty")
-                if not args.get("rep", "").strip():
+                rep = args.get("rep", "").strip()
+                if not rep:
                     errors.append("show.rep must be non-empty")
 
             elif stmt == "hide":
@@ -127,10 +176,23 @@ def parse_and_validate_molcommand(program: str):
                 if not args.get("sel", "").strip():
                     errors.append("color_by_chain.sel must be non-empty")
                 tgt = args.get("target", "").strip().lower()
-                if tgt not in allowed_color_targets:
+                if tgt not in allowed_rep_targets:
                     errors.append(
-                        f"color_by_chain.target must be one of {sorted(allowed_color_targets)}, got {args.get('target')!r}"
+                        f"color_by_chain.target must be one of {sorted(allowed_rep_targets)}, got {args.get('target')!r}"
                     )
+
+            elif stmt in ("color", "color_selection"):
+                if not args.get("sel", "").strip():
+                    errors.append(f"{stmt}.sel must be non-empty")
+                rep = args.get("rep", "").strip().lower()
+                if not rep:
+                    errors.append(f"{stmt}.rep must be non-empty")
+                elif rep not in allowed_rep_targets:
+                    errors.append(
+                        f"{stmt}.rep must be one of {sorted(allowed_rep_targets)}, got {args.get('rep')!r}"
+                    )
+                if not args.get("color", "").strip():
+                    errors.append(f"{stmt}.color must be non-empty")
 
         if errors:
             return False, None, errors
