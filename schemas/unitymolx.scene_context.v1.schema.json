@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "unitymolx.scene_context.v1.schema.json",
+  "title": "UnityMolX Scene Context Tree v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "timestamp",
+    "active",
+    "structures",
+    "selections",
+    "representations",
+    "styles",
+    "recent_actions",
+    "capabilities"
+  ],
+  "properties": {
+    "schema": {
+      "const": "unitymolx.scene_context.v1"
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Unix epoch seconds"
+    },
+    "active": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["structure_name", "selection_name", "rep_ids"],
+      "properties": {
+        "structure_name": { "type": ["string", "null"] },
+        "selection_name": { "type": ["string", "null"] },
+        "rep_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "structures": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/structure" }
+    },
+    "selections": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/selection" }
+    },
+    "representations": {
+      "type": "array",
+      "description": "Future-proof: currently empty until rep introspection exists.",
+      "items": { "$ref": "#/$defs/representation" }
+    },
+    "styles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["palette"],
+      "properties": {
+        "palette": {
+          "type": "object",
+          "description": "Named RGBA colors in [0,1].",
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        }
+      }
+    },
+    "recent_actions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/recentAction" }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "has_selection_list",
+        "has_rep_introspection",
+        "has_structure_introspection"
+      ],
+      "properties": {
+        "has_selection_list": { "type": "boolean" },
+        "has_rep_introspection": { "type": "boolean" },
+        "has_structure_introspection": { "type": "boolean" }
+      }
+    },
+    "introspection": {
+      "type": "object",
+      "description": "Only present when compact=false. Tool-specific payloads allowed.",
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "structure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["structure_id", "name", "source"],
+      "properties": {
+        "structure_id": { "type": "string" },
+        "name": {
+          "type": "string",
+          "description": "Instance name (e.g., 1kx2 or 1kx2_2)"
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "requested", "loaded"],
+          "properties": {
+            "type": { "type": "string" },
+            "requested": { "type": ["string", "null"] },
+            "loaded": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selection_id", "name", "structure_hint"],
+      "properties": {
+        "selection_id": { "type": "string" },
+        "name": { "type": "string" },
+        "structure_hint": {
+          "type": ["string", "null"],
+          "description": "Best-effort PDB4 hint inferred from selection naming"
+        }
+      }
+    },
+    "representation": {
+      "type": "object",
+      "description": "Placeholder for future rep introspection. Keep permissive for now.",
+      "additionalProperties": true
+    },
+    "recentAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["t", "op", "args"],
+      "properties": {
+        "t": { "type": "number" },
+        "op": { "type": "string" },
+        "args": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}
+

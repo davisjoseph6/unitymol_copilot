@@ -6,6 +6,7 @@ This server exposes tools to:
 - Execute raw UnityMol commands over ZMQ
 - Validate strict molcommand DSL (EBNF-based)
 - Execute molcommand DSL by transpiling to UnityMol commands
+- Provide a Scene Context Tree snapshot for scene-aware prompting
 
 DEV_MODE (MOLCOMMANDNL_DEV=1):
 - Keeps strict grammar unchanged
@@ -23,6 +24,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
+from collections import deque
 from typing import Any, Dict
 
 from mcp.server.fastmcp import FastMCP
@@ -31,6 +34,12 @@ from unitymol_zmq import UnityMolZMQ
 from validator import parse_and_validate_molcommand
 from executor import dsl_to_zmq_calls
 from dsl_normalizer import normalize_dsl, dev_mode_enabled
+
+# IMPORTANT:
+# Ensure scene_context.py is importable from this file.
+# Preferred: place scene_context.py at repo root: ~/unitymol_copilot/scene_context.py
+from scene_context import build_scene_context
+
 
 # Logging
 logging.basicConfig(
@@ -44,6 +53,14 @@ mcp = FastMCP("unitymol-copilot")
 
 # Global UnityMolZMQ instance
 unitymol: UnityMolZMQ | None = None
+
+# Recent actions buffer (for requested-vs-loaded reconciliation, and context building)
+RECENT_ACTIONS: deque = deque(maxlen=20)
+
+
+def _log_action(op: str, args: dict) -> None:
+    """Append an action record into the ring buffer."""
+    RECENT_ACTIONS.append({"t": time.time(), "op": op, "args": args})
 
 
 def _ensure_unitymol() -> UnityMolZMQ:
@@ -84,6 +101,17 @@ def _execute_ast(ast: list[dict[str, Any]]) -> dict:
     outputs = []
     for cmd in commands:
         out = unitymol.send_command(cmd)
+
+        # Log *after* execution so context has actual success/result (e.g. fetch -> 1kx2_2)
+        _log_action(
+            "dsl.exec",
+            {
+                "command": cmd,
+                "success": out.get("success", False),
+                "result": out.get("result", ""),
+            },
+        )
+
         outputs.append({"command": cmd, **out})
 
     success = all(o.get("success", False) for o in outputs)
@@ -119,7 +147,19 @@ async def execute_unitymol_command(command: str) -> dict:
     global unitymol
     try:
         unitymol = _ensure_unitymol()
+
         result = unitymol.send_command(command)
+
+        # Log *after* execution so context has actual success/result
+        _log_action(
+            "unitymol.call",
+            {
+                "command": command,
+                "success": result.get("success", False),
+                "result": result.get("result", ""),
+            },
+        )
+
         return {
             "success": result.get("success", False),
             "result": result.get("result", ""),
@@ -222,7 +262,6 @@ async def execute_dsl(program: str) -> dict:
     except Exception as e:
         logger.error(f"execute_dsl error: {e}")
         resp = {"success": False, "result": "", "stdout": str(e), "commands": []}
-        # execution failed => attach dev info even if normalization didn't change
         _attach_dev(resp, dev=dev, ok=False, ninfo=ninfo, norm=norm)
         return resp
 
@@ -240,6 +279,18 @@ async def scene_summary() -> dict:
         "selections": sel.get("result", ""),
         "stdout": sel.get("stdout", ""),
     }
+
+
+@mcp.tool()
+async def scene_context(compact: bool = True) -> dict:
+    """
+    Return the current UnityMol scene context tree (v1).
+    This is the missing foundation that makes prompts scene-aware.
+    """
+    global unitymol
+    unitymol = _ensure_unitymol()
+    ctx = build_scene_context(unitymol, list(RECENT_ACTIONS), compact=compact)
+    return {"success": True, "context": ctx}
 
 
 def main_sync() -> int:
