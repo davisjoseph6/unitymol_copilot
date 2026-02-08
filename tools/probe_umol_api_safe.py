@@ -4,10 +4,11 @@
 import json
 import os
 import zmq
+import time
 
-HOST = os.environ.get("UMOL_HOST", "localhost")
+HOST = os.environ.get("UMOL_HOST") or "localhost"
 PORT = int(os.environ.get("UMOL_PORT", "5555"))
-TIMEOUT_MS = 800
+TIMEOUT_MS = 12000
 
 CANDIDATES = [
     # selections
@@ -52,6 +53,7 @@ def call(cmd: str) -> dict:
 def main():
     print(f"Probing {HOST}:{PORT} (timeout {TIMEOUT_MS}ms)\n")
     for cmd in CANDIDATES:
+        time.sleep(0.05)
         out = call(cmd)
         ok = out.get("success", False)
         res = out.get("result", "")

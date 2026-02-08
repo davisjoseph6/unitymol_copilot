@@ -208,7 +208,7 @@ def _try_robust_load(host: str, port: int, pdb: str) -> bool:
 
 
 def main() -> None:
-    host = os.environ.get("UMOL_HOST", "localhost")
+    host = os.environ.get("UMOL_HOST") or "localhost"
     port = int(os.environ.get("UMOL_PORT", "5555"))
 
     # Prefer a tiny structure for reliability; override with UMOL_PROBE_PDB if needed.

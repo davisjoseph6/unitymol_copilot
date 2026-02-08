@@ -3,6 +3,7 @@
 UnityMol Copilot - Updated implementation using FastMCP
 
 Step 2 (robust color/show/hide) is implemented here.
+Step 3 (NL -> DSL -> execution) is implemented here via `execute_nl`.
 
 Important Step 2 / DSL integration fix:
 - After robust loading completes, always create a stable alias selection named:
@@ -10,15 +11,63 @@ Important Step 2 / DSL integration fix:
   so downstream DSL can refer to all_1crn, all_1kx2, etc., even if UnityMol
   internally names the structure instance 1kx2_2.
 
+Loader strategy (robust in your environment):
+---------------------------------------------
+0) Try local Windows file load first:
+      load("C:/Users/<WIN_USER>/unitymol_data/<pdbid>.pdb")
+   (override directory via UMOL_WIN_PDB_DIR)
+
+1) If local load fails, try UnityMol fetch():
+      fetch("<pdbid>", True/False)
+
+2) If fetch fails, download from RCSB and load via loadFromString().
+
 Notes:
-- This alias selection uses select("all", "all_<pdbid>") which selects all atoms
-  currently loaded. If multiple structures are loaded simultaneously, "all_<pdbid>"
-  will not be structure-scoped unless you introduce a structure-scoped selection query.
+- The alias selection uses select("all", "all_<pdbid>") which selects all atoms
+  currently loaded. If multiple structures are loaded simultaneously,
+  "all_<pdbid>" will not be structure-scoped unless you introduce a
+  structure-scoped selection query.
+
+Step 3: NL -> DSL translation (pluggable backends)
+-------------------------------------------------
+Choose a backend:
+
+A) Local HTTP translator (recommended)
+   - Set:
+       UMOL_NL_BACKEND=http
+       UMOL_NL_ENDPOINT=http://127.0.0.1:8000/translate
+   - The server will POST JSON:
+       {
+         "user_text": "...",
+         "scene_context": {...},
+         "dev": true/false
+       }
+     and expects JSON back like:
+       { "dsl": "...", "meta": {...} }
+
+B) OpenAI backend (optional)
+   - Set:
+       UMOL_NL_BACKEND=openai
+       OPENAI_API_KEY=...
+       UMOL_OPENAI_MODEL=gpt-4.1-mini   (or any model you use)
+   - Requires `openai` python package installed in your venv.
+
+C) Python module callable (optional)
+   - Set:
+       UMOL_NL_BACKEND=python
+       UMOL_NL_PY_MODULE=your_module
+       UMOL_NL_PY_FUNC=your_callable
+   - Callable signature should be:
+       your_callable(user_text: str, scene_context: dict, dev: bool) -> str | dict
+     If dict is returned, it should include key "dsl".
+
+If no backend is configured, `execute_nl` returns a helpful error message.
 """
 
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import logging
 import os
@@ -26,7 +75,7 @@ import re
 import time
 import urllib.request
 from collections import deque
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from mcp.server.fastmcp import FastMCP
 
@@ -55,6 +104,17 @@ RECENT_ACTIONS: deque = deque(maxlen=40)
 # Loader polling knobs
 POLL_INTERVAL_S: float = float(os.environ.get("UMOL_POLL_INTERVAL_S", "0.4"))
 DEFAULT_LOAD_TIMEOUT_S: float = float(os.environ.get("UMOL_LOAD_TIMEOUT_S", "20.0"))
+
+# Local-load knobs (Windows paths; used from WSL)
+WIN_USER: str = os.environ.get("WIN_USER", "").strip()  # optional
+UMOL_WIN_PDB_DIR: str = os.environ.get("UMOL_WIN_PDB_DIR", "").strip()  # optional override
+
+# NL translation knobs
+NL_BACKEND: str = os.environ.get("UMOL_NL_BACKEND", "").strip().lower()  # http | openai | python
+NL_ENDPOINT: str = os.environ.get("UMOL_NL_ENDPOINT", "").strip()        # for http backend
+OPENAI_MODEL: str = os.environ.get("UMOL_OPENAI_MODEL", "gpt-4.1-mini").strip()
+PY_MOD: str = os.environ.get("UMOL_NL_PY_MODULE", "").strip()
+PY_FUNC: str = os.environ.get("UMOL_NL_PY_FUNC", "").strip()
 
 # Special directives emitted by executor
 _LOAD_DIRECTIVE_RE = re.compile(r'__LOAD_STRUCTURE__\(\s*["\']([^"\']+)["\']\s*\)\s*$')
@@ -86,7 +146,7 @@ def _log_action(op: str, args: dict) -> None:
 def _ensure_unitymol() -> UnityMolZMQ:
     global unitymol
     if unitymol is None:
-        host = os.environ.get("UMOL_HOST", "localhost")
+        host = os.environ.get("UMOL_HOST") or "localhost"
         port = int(os.environ.get("UMOL_PORT", "5555"))
         client = UnityMolZMQ(host=host, port=port)
         if not client.connect():
@@ -167,6 +227,15 @@ def _parse_listish(v: Any) -> List[str]:
 
 
 async def _poll_load_evidence(timeout_s: float) -> Dict[str, Any]:
+    """
+    Poll for evidence that a structure is actually loaded.
+
+    Primary signal (most reliable in your UnityMol build):
+      - getSelectionListString()
+
+    Secondary signal (often times out in your build):
+      - getStructureListString()
+    """
     start = time.monotonic()
     last_sel: Optional[Dict[str, Any]] = None
     last_struct: Optional[Dict[str, Any]] = None
@@ -178,7 +247,12 @@ async def _poll_load_evidence(timeout_s: float) -> Dict[str, Any]:
             sels = _parse_listish(raw_sel.get("result"))
             if sels:
                 all_sels = [x for x in sels if x.startswith("all_")]
-                return {"ok": True, "source": "getSelectionListString", "selections": sels, "all_selections": all_sels}
+                return {
+                    "ok": True,
+                    "source": "getSelectionListString",
+                    "selections": sels,
+                    "all_selections": all_sels,
+                }
 
         raw_struct, eff_struct = _send_unitymol("getStructureListString()", log=False)
         last_struct = {"raw": raw_struct, "effective_success": eff_struct}
@@ -190,15 +264,6 @@ async def _poll_load_evidence(timeout_s: float) -> Dict[str, Any]:
         await asyncio.sleep(POLL_INTERVAL_S)
 
     return {"ok": False, "last_selection": last_sel, "last_structure": last_struct}
-
-
-def _pick_best_selection(selections: List[str]) -> Optional[str]:
-    if not selections:
-        return None
-    all_sels = [x for x in selections if x.startswith("all_")]
-    if all_sels:
-        return all_sels[-1]
-    return selections[-1]
 
 
 def _rcsb_url(pdb_id: str, fmt: str) -> str:
@@ -215,6 +280,75 @@ def _build_loadfromstring_candidates(pdb: str, ext: str, data_text: str) -> List
         f'loadFromString("{name}", {safe})',
         f'loadFromString("{name}", {safe}, True, False, True, True, True, -1)',
     ]
+
+
+def _windows_user() -> str:
+    """
+    Best-effort Windows user name for building a path like:
+      C:/Users/<user>/unitymol_data/<pdbid>.pdb
+    """
+    if WIN_USER:
+        return WIN_USER
+    # fall back to USER if it exists (often WSL username), still better than empty
+    return os.environ.get("USER", "joseph")
+
+
+def _win_pdb_dir() -> str:
+    """
+    Directory containing PDB files on Windows.
+    Override with UMOL_WIN_PDB_DIR, else default to:
+      C:/Users/<WIN_USER>/unitymol_data
+    """
+    if UMOL_WIN_PDB_DIR:
+        return UMOL_WIN_PDB_DIR.rstrip("/").rstrip("\\")
+    return f"C:/Users/{_windows_user()}/unitymol_data"
+
+
+def _default_win_pdb_path(pdb_id: str, fmt: str = "pdb") -> str:
+    ext = "pdb" if (fmt or "pdb").strip().lower() == "pdb" else "cif"
+    return f"{_win_pdb_dir()}/{pdb_id.strip().lower()}.{ext}"
+
+
+async def _local_load_structure_internal(pdb_id: str, timeout_s: float, fmt: str) -> dict:
+    """
+    Try to load via UnityMol `load("<windows-path>")`.
+    Returns success only if load evidence appears.
+    """
+    pdb = (pdb_id or "").strip()
+    if not pdb:
+        return {"success": False, "stdout": "Empty pdb_id."}
+
+    win_path = _default_win_pdb_path(pdb, fmt=fmt)
+    raw_load, eff_load = _send_unitymol(f'load("{win_path}")', log=True)
+
+    # create stable alias (even if evidence lags, the alias name is deterministic)
+    alias = f"all_{pdb.lower()}"
+    raw_sel, eff_sel = _send_unitymol(f'select("all", "{alias}", True, False, True)', log=True)
+
+    evidence = await _poll_load_evidence(timeout_s)
+
+    ok = bool(eff_load and eff_sel and evidence.get("ok", False))
+    return {
+        "success": ok,
+        "selection_name": alias if ok else None,
+        "method": "local_load",
+        "path": win_path,
+        "load": {
+            "command": f'load("{win_path}")',
+            "success": eff_load,
+            "raw_success": raw_load.get("success", False),
+            "result": raw_load.get("result", ""),
+            "stdout": raw_load.get("stdout", ""),
+        },
+        "alias_select": {
+            "command": f'select("all", "{alias}", True, False, True)',
+            "success": eff_sel,
+            "raw_success": raw_sel.get("success", False),
+            "result": raw_sel.get("result", ""),
+            "stdout": raw_sel.get("stdout", ""),
+        },
+        "evidence": evidence,
+    }
 
 
 async def _fetch_structure_internal(pdb_id: str, timeout_s: float) -> dict:
@@ -236,7 +370,7 @@ async def _fetch_structure_internal(pdb_id: str, timeout_s: float) -> dict:
         attempts.append(
             {
                 "command": fetch_cmd,
-                "usemmCIF": use_mmcif,
+                "use_mmcif": use_mmcif,
                 "success": eff_fetch,
                 "raw_success": raw_fetch.get("success", False),
                 "result": raw_fetch.get("result", ""),
@@ -246,28 +380,23 @@ async def _fetch_structure_internal(pdb_id: str, timeout_s: float) -> dict:
         )
 
         if evidence.get("ok", False):
-            selection_name: Optional[str] = None
-            if evidence.get("source") == "getSelectionListString":
-                selection_name = _pick_best_selection(evidence.get("selections", []))
-            elif evidence.get("source") == "getStructureListString":
-                structs = evidence.get("structures", [])
-                if structs:
-                    selection_name = f'all_{structs[-1]}'
-                    _send_unitymol(f'select("all", "{selection_name}", True, False, True)', log=True)
-
-            # ### PATCH: always create a stable alias all_<requested_pdbid>
+            # PATCH: always create stable alias all_<requested_pdbid>
             alias = f"all_{pdb.lower()}"
             _send_unitymol(f'select("all", "{alias}", True, False, True)', log=True)
 
             return {
                 "success": True,
-                "selection_name": alias,  # return the stable alias
+                "selection_name": alias,
                 "evidence": evidence,
                 "fetch": attempts[-1],
                 "attempts": attempts,
             }
 
-    return {"success": False, "stdout": "fetch() returned but no load evidence appeared (no structures/selections).", "attempts": attempts}
+    return {
+        "success": False,
+        "stdout": "fetch() returned but no load evidence appeared (no structures/selections).",
+        "attempts": attempts,
+    }
 
 
 async def _load_rcsb_internal(pdb_id: str, fmt: str, timeout_s: float) -> dict:
@@ -303,19 +432,9 @@ async def _load_rcsb_internal(pdb_id: str, fmt: str, timeout_s: float) -> dict:
 
         evidence = await _poll_load_evidence(timeout_s)
         if evidence.get("ok", False):
-            selection_name: Optional[str] = None
-            if evidence.get("source") == "getSelectionListString":
-                selection_name = _pick_best_selection(evidence.get("selections", []))
-            elif evidence.get("source") == "getStructureListString":
-                structs = evidence.get("structures", [])
-                if structs:
-                    selection_name = f'all_{structs[-1]}'
-                    _send_unitymol(f'select("all", "{selection_name}", True, False, True)', log=True)
-
-            # ### PATCH: always create a stable alias all_<requested_pdbid>
+            # PATCH: always create stable alias all_<requested_pdbid>
             alias = f"all_{pdb.lower()}"
             _send_unitymol(f'select("all", "{alias}", True, False, True)', log=True)
-
             return {"success": True, "selection_name": alias, "url": url, "load": last_try, "evidence": evidence}
 
     return {
@@ -328,17 +447,36 @@ async def _load_rcsb_internal(pdb_id: str, fmt: str, timeout_s: float) -> dict:
 
 
 async def _load_structure_internal(pdb_id: str, timeout_s: float, fmt: str) -> dict:
+    """
+    Robust loader:
+      0) local load (Windows path) — best for your environment
+      1) fetch()
+      2) download+loadFromString()
+    """
+    # 0) Local load first (your known-good path)
+    local = await _local_load_structure_internal(pdb_id, timeout_s=timeout_s, fmt=fmt)
+    if local.get("success", False):
+        return local
+
+    # 1) fetch()
     first = await _fetch_structure_internal(pdb_id, timeout_s=timeout_s)
     if first.get("success", False):
         first["method"] = "fetch"
         return first
 
+    # 2) RCSB loadFromString()
     fallback = await _load_rcsb_internal(pdb_id, fmt=fmt, timeout_s=timeout_s)
     if fallback.get("success", False):
         fallback["method"] = "rcsb_loadFromString"
         return fallback
 
-    return {"success": False, "stdout": "Both fetch_structure and load_rcsb failed.", "fetch_structure": first, "load_rcsb": fallback}
+    return {
+        "success": False,
+        "stdout": "All load methods failed: local_load, fetch, load_rcsb.",
+        "local_load": local,
+        "fetch_structure": first,
+        "load_rcsb": fallback,
+    }
 
 
 # -----------------------------
@@ -471,6 +609,119 @@ async def _color_selection_internal(selection_name: str, rep_type: str, color: s
 
 
 # -----------------------------
+# Step 3: NL -> DSL translation
+# -----------------------------
+def _http_post_json(url: str, payload: dict, timeout_s: float = 30.0) -> dict:
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+        raw = resp.read().decode("utf-8", errors="replace")
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {"dsl": "", "meta": {"raw": raw, "parse_error": True}}
+
+
+def _nl_to_dsl_python(user_text: str, scene_ctx: dict, dev: bool) -> Tuple[str, dict]:
+    if not PY_MOD or not PY_FUNC:
+        raise RuntimeError("UMOL_NL_PY_MODULE / UMOL_NL_PY_FUNC not set for python backend.")
+    mod = importlib.import_module(PY_MOD)
+    fn = getattr(mod, PY_FUNC, None)
+    if fn is None:
+        raise RuntimeError(f"Callable {PY_FUNC} not found in module {PY_MOD}.")
+    out = fn(user_text=user_text, scene_context=scene_ctx, dev=dev)
+    if isinstance(out, str):
+        return out, {"backend": "python", "module": PY_MOD, "func": PY_FUNC}
+    if isinstance(out, dict):
+        return str(out.get("dsl", "") or ""), {
+            "backend": "python",
+            "module": PY_MOD,
+            "func": PY_FUNC,
+            "meta": out.get("meta", {}),
+        }
+    return "", {"backend": "python", "error": "callable_return_type_invalid"}
+
+
+def _nl_to_dsl_openai(user_text: str, scene_ctx: dict, dev: bool) -> Tuple[str, dict]:
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY not set.")
+
+    try:
+        from openai import OpenAI  # type: ignore
+    except Exception as e:
+        raise RuntimeError(f"openai package not available in this environment: {e}")
+
+    client = OpenAI(api_key=api_key)
+
+    system = (
+        "You translate user requests into MolCommand DSL for UnityMol.\n"
+        "Rules:\n"
+        "- Output ONLY the DSL program (no markdown, no explanation).\n"
+        "- Use existing selections when possible (from scene_context).\n"
+        "- If user asks to load a PDB ID, emit the DSL load command used by this system.\n"
+        "- Prefer stable alias selections all_<pdbid> after loading.\n"
+        "- If ambiguous, make the safest assumption consistent with scene_context.\n"
+    )
+
+    user_payload = {
+        "user_text": user_text,
+        "scene_context": scene_ctx,
+        "dev": dev,
+        "output_spec": "Return ONLY MolCommand DSL as plain text.",
+    }
+
+    resp = client.responses.create(
+        model=OPENAI_MODEL,
+        input=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": json.dumps(user_payload)},
+        ],
+        temperature=0.0,
+    )
+
+    dsl = ""
+    try:
+        dsl = (getattr(resp, "output_text", "") or "").strip()
+    except Exception:
+        dsl = ""
+
+    return dsl, {"backend": "openai", "model": OPENAI_MODEL}
+
+
+def _nl_to_dsl_internal(user_text: str, scene_ctx: dict, dev: bool) -> Tuple[str, dict]:
+    backend = NL_BACKEND
+    if not backend:
+        backend = "http" if NL_ENDPOINT else ""
+
+    if backend == "http":
+        if not NL_ENDPOINT:
+            raise RuntimeError("UMOL_NL_ENDPOINT not set for http backend.")
+        payload = {"user_text": user_text, "scene_context": scene_ctx, "dev": dev}
+        out = _http_post_json(NL_ENDPOINT, payload, timeout_s=30.0)
+        dsl = str(out.get("dsl", "") or "").strip()
+        return dsl, {"backend": "http", "endpoint": NL_ENDPOINT, "meta": out.get("meta", {})}
+
+    if backend == "openai":
+        return _nl_to_dsl_openai(user_text, scene_ctx, dev)
+
+    if backend == "python":
+        return _nl_to_dsl_python(user_text, scene_ctx, dev)
+
+    raise RuntimeError(
+        "No NL backend configured. Set one of:\n"
+        "- UMOL_NL_BACKEND=http + UMOL_NL_ENDPOINT=...\n"
+        "- UMOL_NL_BACKEND=openai + OPENAI_API_KEY=...\n"
+        "- UMOL_NL_BACKEND=python + UMOL_NL_PY_MODULE + UMOL_NL_PY_FUNC"
+    )
+
+
+# -----------------------------
 # Core tools
 # -----------------------------
 @mcp.tool()
@@ -478,7 +729,13 @@ async def execute_unitymol_command(command: str) -> dict:
     """Execute a UnityMol API command and return the result (with effective_success)."""
     try:
         raw, eff = _send_unitymol(command, log=True)
-        return {"success": eff, "raw_success": raw.get("success", False), "result": raw.get("result", ""), "stdout": raw.get("stdout", ""), "command": command}
+        return {
+            "success": eff,
+            "raw_success": raw.get("success", False),
+            "result": raw.get("result", ""),
+            "stdout": raw.get("stdout", ""),
+            "command": command,
+        }
     except Exception as e:
         logger.error(f"Error executing command '{command}': {e}")
         return {"success": False, "raw_success": False, "result": "", "stdout": str(e), "command": command}
@@ -525,10 +782,34 @@ async def _execute_ast(ast: list[dict[str, Any]]) -> dict:
             ok = bool(loaded.get("success", False))
             sel_name = loaded.get("selection_name")
 
-            _log_action("dsl.load", {"pdb_id": pdb, "success": ok, "method": loaded.get("method", ""), "selection_name": sel_name})
-            loads.append({"pdb_id": pdb, "success": ok, "method": loaded.get("method", ""), "selection_name": sel_name})
+            _log_action(
+                "dsl.load",
+                {
+                    "pdb_id": pdb,
+                    "success": ok,
+                    "method": loaded.get("method", ""),
+                    "selection_name": sel_name,
+                },
+            )
+            loads.append(
+                {
+                    "pdb_id": pdb,
+                    "success": ok,
+                    "method": loaded.get("method", ""),
+                    "selection_name": sel_name,
+                }
+            )
 
-            outputs.append({"command": cmd, "success": ok, "raw_success": ok, "result": sel_name or "", "stdout": loaded.get("stdout", "") or ""})
+            outputs.append(
+                {
+                    "command": cmd,
+                    "success": ok,
+                    "raw_success": ok,
+                    "result": sel_name or "",
+                    "stdout": loaded.get("stdout", "") or "",
+                    "load_details": loaded,
+                }
+            )
             continue
 
         mc = _COLOR_DIRECTIVE_RE.match(cmd.strip())
@@ -539,7 +820,15 @@ async def _execute_ast(ast: list[dict[str, Any]]) -> dict:
 
             colored = await _color_selection_internal(sel, rep, col, log_unitymol=False)
 
-            _log_action("dsl.exec", {"command": colored.get("used_command", ""), "success": bool(colored.get("success", False)), "raw_success": bool(colored.get("raw_success", False)), "result": colored.get("result", "")})
+            _log_action(
+                "dsl.exec",
+                {
+                    "command": colored.get("used_command", ""),
+                    "success": bool(colored.get("success", False)),
+                    "raw_success": bool(colored.get("raw_success", False)),
+                    "result": colored.get("result", ""),
+                },
+            )
 
             outputs.append(
                 {
@@ -555,8 +844,13 @@ async def _execute_ast(ast: list[dict[str, Any]]) -> dict:
             continue
 
         raw, eff = _send_unitymol(cmd, log=False)
-        _log_action("dsl.exec", {"command": cmd, "success": eff, "raw_success": raw.get("success", False), "result": raw.get("result", "")})
-        outputs.append({"command": cmd, "success": eff, "raw_success": raw.get("success", False), "result": raw.get("result", ""), "stdout": raw.get("stdout", "")})
+        _log_action(
+            "dsl.exec",
+            {"command": cmd, "success": eff, "raw_success": raw.get("success", False), "result": raw.get("result", "")},
+        )
+        outputs.append(
+            {"command": cmd, "success": eff, "raw_success": raw.get("success", False), "result": raw.get("result", ""), "stdout": raw.get("stdout", "")}
+        )
 
     success = all(o.get("success", False) for o in outputs)
     last = outputs[-1] if outputs else {}
@@ -583,7 +877,6 @@ async def execute_dsl(program: str) -> dict:
 
     try:
         out = await _execute_ast(ast)
-        # ### PATCH: attach dev info based on actual execution success
         _attach_dev(out, dev=dev, ok=bool(out.get("success", False)), ninfo=ninfo, norm=norm)
         return out
     except Exception as e:
@@ -591,6 +884,62 @@ async def execute_dsl(program: str) -> dict:
         resp = {"success": False, "result": "", "stdout": str(e), "commands": []}
         _attach_dev(resp, dev=dev, ok=False, ninfo=ninfo, norm=norm)
         return resp
+
+
+@mcp.tool()
+async def execute_nl(user_text: str) -> dict:
+    """
+    Translate natural language -> MolCommand DSL -> execute.
+
+    Returns:
+      {
+        "success": bool,
+        "dsl": "...",
+        "translation": { ...backend meta... },
+        "execution": { ...execute_dsl output... },
+        "stdout": "..."
+      }
+    """
+    dev = dev_mode_enabled()
+    global unitymol
+    unitymol = _ensure_unitymol()
+
+    scene_ctx = build_scene_context(unitymol, list(RECENT_ACTIONS), compact=True)
+
+    try:
+        dsl, tmeta = _nl_to_dsl_internal(user_text, scene_ctx, dev=dev)
+    except Exception as e:
+        return {
+            "success": False,
+            "dsl": "",
+            "translation": {"error": str(e), "backend": NL_BACKEND or "auto"},
+            "execution": {},
+            "stdout": str(e),
+        }
+
+    if not dsl.strip():
+        return {
+            "success": False,
+            "dsl": dsl,
+            "translation": tmeta,
+            "execution": {},
+            "stdout": "Translator returned empty DSL.",
+        }
+
+    exec_out = await execute_dsl(dsl)
+
+    ok = bool(exec_out.get("success", False))
+    stdout = (exec_out.get("stdout", "") or "").strip()
+
+    _log_action("nl.exec", {"user_text": user_text, "dsl": dsl, "success": ok, "backend": tmeta.get("backend", "")})
+
+    return {
+        "success": ok,
+        "dsl": dsl,
+        "translation": tmeta,
+        "execution": exec_out,
+        "stdout": stdout,
+    }
 
 
 @mcp.tool()
