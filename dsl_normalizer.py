@@ -25,13 +25,20 @@ Tiers:
       - drop non-DSL lines
       - strip list markers
       - strip trailing '.' / ';'
+
+Config integration (if present):
+- config/rewrite_rules.yaml:
+    - reject_if_matches: list of regex patterns that should hard-fail
+    - repairs: list of {match, replace_with, note} conservative repairs
+- config/synonyms.yaml:
+    - rep_aliases: mapping of plural/aliases for representation targets
 """
 
 from __future__ import annotations
 
 import os
 import re
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 
 
 # Include known "LLM-ish" alias verbs here so DEV_LOOSE doesn't drop them.
@@ -57,7 +64,12 @@ _VERBS = (
     "colorbychain",
 )
 
-_COLOR_TARGET_ALIASES = {
+# Stable, strict targets used by validator/executor.
+# Keep this list stable and conservative.
+_COLOR_TARGETS = {"atom", "bond", "cartoon", "line", "point", "surface", "tube"}
+
+# Local fallback aliases (used if config is absent).
+_FALLBACK_COLOR_TARGET_ALIASES = {
     "atoms": "atom",
     "bonds": "bond",
     "lines": "line",
@@ -67,7 +79,14 @@ _COLOR_TARGET_ALIASES = {
     "cartoons": "cartoon",
 }
 
-_COLOR_TARGETS = {"atom", "bond", "cartoon", "line", "point", "surface", "tube"}
+
+# Optional config integration
+try:
+    from config_loader import load_config  # type: ignore
+
+    _CFG = load_config()
+except Exception:  # pragma: no cover
+    _CFG = None
 
 
 def dev_mode_enabled() -> bool:
@@ -95,7 +114,7 @@ def normalize_dsl(text: str, *, dev: bool | None = None) -> Tuple[str, Dict]:
         dev = dev_mode_enabled()
 
     raw = (text or "").strip()
-    info: Dict = {"dev": dev, "changed": False, "steps": []}
+    info: Dict[str, Any] = {"dev": dev, "changed": False, "steps": []}
 
     if not raw or not dev:
         return raw, info
@@ -105,6 +124,9 @@ def normalize_dsl(text: str, *, dev: bool | None = None) -> Tuple[str, Dict]:
         info["steps"].append("dev_loose")
 
     s = _strip_code_fences_and_prefix(raw, info)
+
+    # Config-driven hard rejects (fail-fast)
+    _cfg_reject(s, info)
 
     if loose:
         s = _split_semicolons(s, info)
@@ -142,6 +164,9 @@ def normalize_dsl(text: str, *, dev: bool | None = None) -> Tuple[str, Dict]:
                     did_trailing_punct = True
                 t = t2
 
+        # Config-driven conservative repairs (line-level)
+        t = _cfg_repair_line(t, info)
+
         t = _canonicalize_call_verb(t, info)
         t = _normalize_parenthesized_form(t, info)
         t = _normalize_space_arg_form(t, info)
@@ -153,7 +178,7 @@ def normalize_dsl(text: str, *, dev: bool | None = None) -> Tuple[str, Dict]:
         # Rewrite alias verbs like add_coloring(...) / add_color_command(...) / colorByChain(...)
         t = _rewrite_color_by_chain_alias_verbs(t, info)
 
-        # Normalize targets/plurals
+        # Normalize targets/plurals (config-driven if possible)
         t = _normalize_color_by_chain_target_aliases(t, info)
 
         # Fix sel="all_lines"/"all_surface"/"all_tube"/etc (rep-like sel) when target is present
@@ -174,7 +199,53 @@ def normalize_dsl(text: str, *, dev: bool | None = None) -> Tuple[str, Dict]:
     return s2, info
 
 
-def _strip_code_fences_and_prefix(s: str, info: Dict) -> str:
+def _cfg_reject(s: str, info: Dict[str, Any]) -> None:
+    """
+    Fail-fast on forbidden patterns from config/rewrite_rules.yaml.
+
+    This prevents unsafe / unsupported DSL from silently slipping through.
+    """
+    if _CFG is None:
+        return
+    rules = getattr(_CFG, "rewrite_rules", {}) or {}
+    reject = rules.get("reject_if_matches", []) or []
+    for pat in reject:
+        if re.search(pat, s):
+            info["steps"].append("cfg_reject")
+            raise ValueError(f"Rejected DSL (matches forbidden pattern): {pat}")
+
+
+def _cfg_repair_line(line: str, info: Dict[str, Any]) -> str:
+    """
+    Apply conservative, config-driven repairs on a single line.
+
+    Each repair is applied only if its regex matches the whole line (or is
+    sufficiently anchored by the author). Repairs are intended to be safe.
+    """
+    if _CFG is None:
+        return line
+    rules = getattr(_CFG, "rewrite_rules", {}) or {}
+    repairs = rules.get("repairs", []) or []
+    t = line.strip()
+    for rule in repairs:
+        match = rule.get("match", "")
+        replace_with = rule.get("replace_with", "")
+        if not match or not replace_with:
+            continue
+        m = re.match(match, t)
+        if not m:
+            continue
+        try:
+            t2 = replace_with.format(**m.groupdict())
+        except Exception:
+            continue
+        if t2 != t:
+            info["steps"].append("cfg_repair")
+            return t2
+    return line
+
+
+def _strip_code_fences_and_prefix(s: str, info: Dict[str, Any]) -> str:
     orig = s
     s = re.sub(r"^\s*DSL>\s*", "", s)
     s = re.sub(r"^\s*DSL>\s*", "", s, flags=re.M)
@@ -188,7 +259,7 @@ def _strip_code_fences_and_prefix(s: str, info: Dict) -> str:
     return s
 
 
-def _split_semicolons(s: str, info: Dict) -> str:
+def _split_semicolons(s: str, info: Dict[str, Any]) -> str:
     orig = s
     verbs = "|".join(_VERBS)
     pat = rf";\s*(?=(?:[-*]\s*|\d+\s*[.)]\s*)?\(?\s*(?:{verbs})\b)"
@@ -211,7 +282,7 @@ def _looks_like_dsl_stmt(line: str) -> bool:
     return bool(re.match(rf"^\(?\s*({verbs})\b", t, flags=re.I))
 
 
-def _drop_non_dsl_lines(s: str, info: Dict) -> str:
+def _drop_non_dsl_lines(s: str, info: Dict[str, Any]) -> str:
     orig = s
     keep = []
     dropped = 0
@@ -233,7 +304,7 @@ def _drop_non_dsl_lines(s: str, info: Dict) -> str:
     return orig
 
 
-def _canonicalize_call_verb(s: str, info: Dict) -> str:
+def _canonicalize_call_verb(s: str, info: Dict[str, Any]) -> str:
     orig = s
     m = re.match(r"^([A-Za-z_]\w*)\s*\(", s)
     if not m:
@@ -249,7 +320,7 @@ def _canonicalize_call_verb(s: str, info: Dict) -> str:
     return s if s != orig else orig
 
 
-def _normalize_parenthesized_form(s: str, info: Dict) -> str:
+def _normalize_parenthesized_form(s: str, info: Dict[str, Any]) -> str:
     orig = s
     m = re.match(r"^\(\s*([A-Za-z_]\w*)\s+(.*)\)\s*$", s, flags=re.S)
     if m:
@@ -264,7 +335,7 @@ def _normalize_parenthesized_form(s: str, info: Dict) -> str:
     return s
 
 
-def _normalize_space_arg_form(s: str, info: Dict) -> str:
+def _normalize_space_arg_form(s: str, info: Dict[str, Any]) -> str:
     orig = s
     if "(" in s:
         return s
@@ -282,7 +353,7 @@ def _normalize_space_arg_form(s: str, info: Dict) -> str:
     return s
 
 
-def _fix_double_quoted_value(s: str, info: Dict) -> str:
+def _fix_double_quoted_value(s: str, info: Dict[str, Any]) -> str:
     """
     Fix LLM slip:
       target=""surface"  -> target="surface"
@@ -297,7 +368,7 @@ def _fix_double_quoted_value(s: str, info: Dict) -> str:
     return s2
 
 
-def _insert_missing_commas(s: str, info: Dict) -> str:
+def _insert_missing_commas(s: str, info: Dict[str, Any]) -> str:
     orig = s
     s2 = re.sub(r'"\s+([A-Za-z_]\w*\s*=)', r'", \1', s)
     if s2 != orig:
@@ -305,7 +376,7 @@ def _insert_missing_commas(s: str, info: Dict) -> str:
     return s2
 
 
-def _rewrite_color_by_chain_alias_verbs(s: str, info: Dict) -> str:
+def _rewrite_color_by_chain_alias_verbs(s: str, info: Dict[str, Any]) -> str:
     """
     Rewrite known alias verbs into strict DSL:
 
@@ -408,7 +479,30 @@ def _rewrite_color_by_chain_alias_verbs(s: str, info: Dict) -> str:
     return s
 
 
-def _normalize_color_by_chain_target_aliases(s: str, info: Dict) -> str:
+def _get_target_aliases() -> Dict[str, str]:
+    """
+    Return target alias mapping, preferring config/synonyms.yaml if available.
+
+    We treat representation aliases as target aliases for color_by_chain.
+    """
+    if _CFG is None:
+        return dict(_FALLBACK_COLOR_TARGET_ALIASES)
+
+    syn = getattr(_CFG, "synonyms", {}) or {}
+
+    # If you later add a dedicated mapping (e.g., color_target_aliases), it will be used.
+    dedicated = syn.get("color_target_aliases")
+    if isinstance(dedicated, dict) and dedicated:
+        return {str(k).lower(): str(v).lower() for k, v in dedicated.items()}
+
+    rep_aliases = syn.get("rep_aliases")
+    if isinstance(rep_aliases, dict) and rep_aliases:
+        return {str(k).lower(): str(v).lower() for k, v in rep_aliases.items()}
+
+    return dict(_FALLBACK_COLOR_TARGET_ALIASES)
+
+
+def _normalize_color_by_chain_target_aliases(s: str, info: Dict[str, Any]) -> str:
     """
     Normalize plural/alias targets in color_by_chain calls:
       target="atoms" -> target="atom"
@@ -422,8 +516,9 @@ def _normalize_color_by_chain_target_aliases(s: str, info: Dict) -> str:
     if not m:
         return s
 
+    aliases = _get_target_aliases()
     tgt = m.group(1).strip().lower()
-    tgt2 = _COLOR_TARGET_ALIASES.get(tgt, tgt)
+    tgt2 = aliases.get(tgt, tgt)
     if tgt2 == tgt:
         return s
 
@@ -433,14 +528,14 @@ def _normalize_color_by_chain_target_aliases(s: str, info: Dict) -> str:
     return s2
 
 
-def _normalize_color_by_chain_sel_repname(s: str, info: Dict) -> str:
+def _normalize_color_by_chain_sel_repname(s: str, info: Dict[str, Any]) -> str:
     """
     Fix common slip where sel accidentally becomes a representation-like token:
 
-      color_by_chain(sel="all_lines", target="line")     -> color_by_chain(sel="all", target="line")
-      color_by_chain(sel="all_surface", target="surface")-> color_by_chain(sel="all", target="surface")
-      color_by_chain(sel="lines", target="line")         -> color_by_chain(sel="all", target="line")
-      color_by_chain(sel="atoms", target="atom")         -> color_by_chain(sel="all", target="atom")
+      color_by_chain(sel="all_lines", target="line")      -> color_by_chain(sel="all", target="line")
+      color_by_chain(sel="all_surface", target="surface") -> color_by_chain(sel="all", target="surface")
+      color_by_chain(sel="lines", target="line")          -> color_by_chain(sel="all", target="line")
+      color_by_chain(sel="atoms", target="atom")          -> color_by_chain(sel="all", target="atom")
 
     IMPORTANT:
     - We only do this when target is present.
@@ -463,11 +558,13 @@ def _normalize_color_by_chain_sel_repname(s: str, info: Dict) -> str:
     if re.fullmatch(r"all_[0-9a-z]{4}", sel_l):
         return s
 
+    aliases = _get_target_aliases()
+
     # Normalize possible "all_<rep>" patterns and bare rep tokens.
     candidate = sel_l
     if candidate.startswith("all_"):
         candidate = candidate[4:]
-    candidate = _COLOR_TARGET_ALIASES.get(candidate, candidate)
+    candidate = aliases.get(candidate, candidate)
 
     if candidate not in _COLOR_TARGETS:
         return s
@@ -479,7 +576,7 @@ def _normalize_color_by_chain_sel_repname(s: str, info: Dict) -> str:
     return s2
 
 
-def _normalize_color_by_chain_single_arg(s: str, info: Dict) -> str:
+def _normalize_color_by_chain_single_arg(s: str, info: Dict[str, Any]) -> str:
     """
     If the model encodes the target in sel (single-arg form), infer target:
 
@@ -497,8 +594,10 @@ def _normalize_color_by_chain_single_arg(s: str, info: Dict) -> str:
         return s
 
     raw = m.group(1).strip().lower()
+    aliases = _get_target_aliases()
+
     candidate = raw[4:] if raw.startswith("all_") else raw
-    candidate = _COLOR_TARGET_ALIASES.get(candidate, candidate)
+    candidate = aliases.get(candidate, candidate)
 
     if candidate not in _COLOR_TARGETS:
         return s

@@ -1,0 +1,7 @@
+version: v1
+always_require_if_scene_nonempty: true
+requires_context_intents:
+  - load
+  - show
+  - hide
+  - color

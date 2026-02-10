@@ -1,0 +1,13 @@
+version: v1
+rep_aliases:
+  c: cartoon
+  cartoon: cartoon
+  ribbon: cartoon
+  line: lines
+  lines: lines
+  surface: surface
+  spheres: spheres
+  sphere: spheres
+color_aliases:
+  grey: gray
+  gray: gray

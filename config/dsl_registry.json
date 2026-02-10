@@ -1,0 +1,55 @@
+{
+  "dsl_version": "unitymolx.dsl.v1",
+  "functions": {
+    "add_structure": {
+      "args": {
+        "PDBID": { "type": "string", "pattern": "^[0-9][a-z0-9]{3}$" },
+        "filePath": { "type": "string" }
+      },
+      "required": []
+    },
+    "show": {
+      "args": {
+        "sel": { "type": "string" },
+        "rep": { "type": "string" }
+      },
+      "required": ["sel", "rep"]
+    },
+    "hide": {
+      "args": {
+        "sel": { "type": "string" }
+      },
+      "required": ["sel"]
+    },
+    "color_by_chain": {
+      "args": {
+        "sel": { "type": "string" },
+        "target": { "type": "string" }
+      },
+      "required": ["sel", "target"]
+    },
+    "color": {
+      "args": {
+        "sel": { "type": "string" },
+        "rep": { "type": "string" },
+        "color": { "type": "string" }
+      },
+      "required": ["sel", "rep", "color"]
+    },
+    "color_selection": {
+      "args": {
+        "sel": { "type": "string" },
+        "rep": { "type": "string" },
+        "color": { "type": "string" }
+      },
+      "required": ["sel", "rep", "color"]
+    },
+    "select": {
+      "args": {
+        "query": { "type": "string" },
+        "name": { "type": "string" }
+      },
+      "required": []
+    }
+  }
+}

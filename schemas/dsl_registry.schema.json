@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["dsl_version", "functions"],
+  "properties": {
+    "dsl_version": { "type": "string" },
+    "functions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["args", "required"],
+        "properties": {
+          "args": { "type": "object" },
+          "required": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

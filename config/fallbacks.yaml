@@ -1,0 +1,3 @@
+version: v1
+reissue_show_before_color: true
+max_retries: 1

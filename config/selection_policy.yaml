@@ -1,0 +1,4 @@
+version: v1
+all_selection_template: "all_{structure_name}"
+protein_selection_template: "{structure_name}_protein_or_nucleic"
+duplicate_suffix_template: "{structure_name}_{n}"

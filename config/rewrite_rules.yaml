@@ -1,0 +1,13 @@
+version: v1
+
+reject_if_matches:
+  - "select_structure="
+  - "color_by_color\\("
+  - "\\bhide_all\\s*\\("
+  - "\\bname_[A-Za-z0-9]+\\b"
+
+# Conservative repair patterns (only when unambiguous)
+repairs:
+  - match: "^colorByChain\\(\"(?P<sel>[^\"]+)\",\\s*\"(?P<rep>[^\"]+)\"\\)\\s*$"
+    replace_with: "color_by_chain(sel=\"{sel}\", target=\"{rep}\")"
+    note: "Normalize UnityMol camelCase call into DSL."

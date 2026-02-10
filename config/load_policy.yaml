@@ -1,0 +1,3 @@
+version: v1
+idempotent_load: true
+allow_duplicate_load: false
