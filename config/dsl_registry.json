@@ -3,53 +3,118 @@
   "functions": {
     "add_structure": {
       "args": {
-        "PDBID": { "type": "string", "pattern": "^[0-9][a-z0-9]{3}$" },
-        "filePath": { "type": "string" }
+        "PDBID": {
+          "type": "string",
+          "pattern": "^[0-9][a-z0-9]{3}$"
+        },
+        "filePath": {
+          "type": "string"
+        }
       },
       "required": []
     },
     "show": {
       "args": {
-        "sel": { "type": "string" },
-        "rep": { "type": "string" }
+        "sel": {
+          "type": "string"
+        },
+        "rep": {
+          "type": "string"
+        }
       },
-      "required": ["sel", "rep"]
+      "required": [
+        "sel",
+        "rep"
+      ]
     },
     "hide": {
       "args": {
-        "sel": { "type": "string" }
+        "sel": {
+          "type": "string"
+        }
       },
-      "required": ["sel"]
+      "required": [
+        "sel"
+      ]
     },
     "color_by_chain": {
       "args": {
-        "sel": { "type": "string" },
-        "target": { "type": "string" }
+        "sel": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
       },
-      "required": ["sel", "target"]
+      "required": [
+        "sel",
+        "target"
+      ]
     },
     "color": {
       "args": {
-        "sel": { "type": "string" },
-        "rep": { "type": "string" },
-        "color": { "type": "string" }
+        "sel": {
+          "type": "string"
+        },
+        "rep": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        }
       },
-      "required": ["sel", "rep", "color"]
+      "required": [
+        "sel",
+        "rep",
+        "color"
+      ]
     },
     "color_selection": {
       "args": {
-        "sel": { "type": "string" },
-        "rep": { "type": "string" },
-        "color": { "type": "string" }
+        "sel": {
+          "type": "string"
+        },
+        "rep": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        }
       },
-      "required": ["sel", "rep", "color"]
+      "required": [
+        "sel",
+        "rep",
+        "color"
+      ]
     },
     "select": {
       "args": {
-        "query": { "type": "string" },
-        "name": { "type": "string" }
+        "query": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
       },
       "required": []
     }
+  },
+  "enums": {
+    "rep": [
+      "cartoon",
+      "line",
+      "surface",
+      "tube",
+      "point"
+    ],
+    "color_by_chain_targets": [
+      "atom",
+      "bond",
+      "cartoon",
+      "line",
+      "point",
+      "surface",
+      "tube"
+    ]
   }
 }

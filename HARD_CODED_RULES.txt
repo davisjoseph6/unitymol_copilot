@@ -1,47 +1,12 @@
-./mcp_server.py:547:def _normalize_rep_type(rep_type: str) -> str:
-./mcp_server.py:549:    mapping = {
-./mcp_server.py:571:    rep = _normalize_rep_type(rep_type)
-./mcp_server.py:962:    rep = _normalize_rep_type(rep_type)
-./mcp_server.py:983:    rep = _normalize_rep_type(rep_type)
-./mcp_server.py:990:    rep = _normalize_rep_type(rep_type)
-./mcp_server.py:997:    rep = _normalize_rep_type(rep_type)
+./mcp_server.py:550:        "cartoon": "c",
+./mcp_server.py:554:        "line": "l",
+./mcp_server.py:557:        "surface": "s",
 ./validator.py:127:        allowed_rep_targets = {
 ./validator.py:179:                if tgt not in allowed_rep_targets:
 ./validator.py:181:                        f"color_by_chain.target must be one of {sorted(allowed_rep_targets)}, got {args.get('target')!r}"
 ./validator.py:190:                elif rep not in allowed_rep_targets:
 ./validator.py:192:                        f"{stmt}.rep must be one of {sorted(allowed_rep_targets)}, got {args.get('rep')!r}"
-./dsl_normalizer.py:34:    - rep_aliases: mapping of plural/aliases for representation targets
-./dsl_normalizer.py:46:_VERBS = (
-./dsl_normalizer.py:69:_COLOR_TARGETS = {"atom", "bond", "cartoon", "line", "point", "surface", "tube"}
-./dsl_normalizer.py:72:_FALLBACK_COLOR_TARGET_ALIASES = {
-./dsl_normalizer.py:264:    verbs = "|".join(_VERBS)
-./dsl_normalizer.py:281:    verbs = "|".join(_VERBS)
-./dsl_normalizer.py:315:    if fn in _VERBS and fn_raw.lower() != fn_raw:
-./dsl_normalizer.py:329:        if fn in _VERBS:
-./dsl_normalizer.py:347:        if fn in _VERBS and "=" in inner:
-./dsl_normalizer.py:407:                info["steps"].append("rewrite_color_alias_verb")
-./dsl_normalizer.py:421:            info["steps"].append("rewrite_color_alias_verb")
-./dsl_normalizer.py:425:            info["steps"].append("rewrite_color_alias_verb")
-./dsl_normalizer.py:429:            info["steps"].append("rewrite_color_alias_verb")
-./dsl_normalizer.py:457:            info["steps"].append("rewrite_color_alias_verb")
-./dsl_normalizer.py:466:        info["steps"].append("rewrite_color_alias_verb")
-./dsl_normalizer.py:471:        info["steps"].append("rewrite_color_alias_verb")
-./dsl_normalizer.py:476:        info["steps"].append("rewrite_color_alias_verb")
-./dsl_normalizer.py:489:        return dict(_FALLBACK_COLOR_TARGET_ALIASES)
-./dsl_normalizer.py:498:    rep_aliases = syn.get("rep_aliases")
-./dsl_normalizer.py:499:    if isinstance(rep_aliases, dict) and rep_aliases:
-./dsl_normalizer.py:500:        return {str(k).lower(): str(v).lower() for k, v in rep_aliases.items()}
-./dsl_normalizer.py:502:    return dict(_FALLBACK_COLOR_TARGET_ALIASES)
-./dsl_normalizer.py:569:    if candidate not in _COLOR_TARGETS:
-./dsl_normalizer.py:602:    if candidate not in _COLOR_TARGETS:
-./config/synonyms.yaml:2:rep_aliases:
-./config/synonyms.yaml:11:color_aliases:
-./executor.py:33:def _normalize_rep_type(rep_type: str) -> str:
-./executor.py:36:    mapping = {
-./executor.py:102:            rep = _esc(_normalize_rep_type(a["rep"]))
-./executor.py:111:            target = _esc(_normalize_rep_type(a["target"]))
-./executor.py:124:            rep_norm = _normalize_rep_type(str(rep))
-./ir_compiler.py:17:    rep_aliases = _CFG.synonyms.get("rep_aliases", {}) or {}
-./ir_compiler.py:18:    color_aliases = _CFG.synonyms.get("color_aliases", {}) or {}
-./ir_compiler.py:20:    rep = rep_aliases.get(ir.rep, ir.rep) if ir.rep else None
-./ir_compiler.py:21:    color = color_aliases.get(ir.color, ir.color) if ir.color else None
+./registry_utils.py:68:def allowed_reps() -> Set[str]:
+./executor.py:37:        "cartoon": "c",
+./executor.py:41:        "line": "l",
+./executor.py:44:        "surface": "s",

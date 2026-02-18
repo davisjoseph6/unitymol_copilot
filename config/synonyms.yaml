@@ -11,3 +11,19 @@ rep_aliases:
 color_aliases:
   grey: gray
   gray: gray
+umol_rep_codes:
+  cartoon: c
+  line: l
+  surface: s
+  tube: tube
+  point: point
+  atom: atom
+  bond: bond
+color_target_aliases:
+  atoms: atom
+  bonds: bond
+  lines: line
+  points: point
+  tubes: tube
+  surfaces: surface
+  cartoons: cartoon

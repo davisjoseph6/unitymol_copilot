@@ -12,26 +12,17 @@ Purpose:
 This is intentionally conservative: it only applies transformations that are
 unambiguous and already expected in the project.
 
-Key behavior:
-- Normalizes *line-by-line* so multi-line programs work.
-  (Most LLM slips happen per statement, not across statements.)
-
-Tiers:
-- MOLCOMMANDNL_DEV=1:
-    conservative normalization only
-- MOLCOMMANDNL_DEV_LOOSE=1 (requires DEV=1):
-    additionally:
-      - split semicolon-separated statements into lines (best-effort)
-      - drop non-DSL lines
-      - strip list markers
-      - strip trailing '.' / ';'
-
-Config integration (if present):
+Config integration:
+- config/dsl_registry.json:
+    - functions: used to detect valid DSL verbs
+    - enums.rep, enums.color_by_chain_targets: used to normalize targets safely
 - config/rewrite_rules.yaml:
-    - reject_if_matches: list of regex patterns that should hard-fail
-    - repairs: list of {match, replace_with, note} conservative repairs
+    - reject_if_matches: patterns that hard-fail
+    - repairs: conservative regex repairs
+    - alias_verbs: verbs allowed to appear in DEV_LOOSE statement detection
 - config/synonyms.yaml:
-    - rep_aliases: mapping of plural/aliases for representation targets
+    - rep_aliases / color_aliases (elsewhere)
+    - color_target_aliases: target alias mapping for color_by_chain normalization
 """
 
 from __future__ import annotations
@@ -40,47 +31,10 @@ import os
 import re
 from typing import Any, Dict, Tuple
 
-
-# Include known "LLM-ish" alias verbs here so DEV_LOOSE doesn't drop them.
-# We'll rewrite them back to strict verbs later.
-_VERBS = (
-    # Core MolCommandNL / UnityMol verbs
-    "add_structure",
-    "select",
-    "show",
-    "hide",
-    "color_by_chain",
-    "update_representation",
-    "update_coloring",
-    "center",
-    "rotate",
-    "annotate",
-    "measure",
-    # alias verbs observed from the model:
-    "add_coloring",
-    "add_color_command",
-    "add_color_by_chain",
-    # camelCase alias sometimes used:
-    "colorbychain",
-)
-
-# Stable, strict targets used by validator/executor.
-# Keep this list stable and conservative.
-_COLOR_TARGETS = {"atom", "bond", "cartoon", "line", "point", "surface", "tube"}
-
-# Local fallback aliases (used if config is absent).
-_FALLBACK_COLOR_TARGET_ALIASES = {
-    "atoms": "atom",
-    "bonds": "bond",
-    "lines": "line",
-    "points": "point",
-    "tubes": "tube",
-    "surfaces": "surface",
-    "cartoons": "cartoon",
-}
+from registry_utils import color_by_chain_targets, dsl_verbs, target_aliases
 
 
-# Optional config integration
+# Optional config integration (for reject/repairs)
 try:
     from config_loader import load_config  # type: ignore
 
@@ -175,13 +129,13 @@ def normalize_dsl(text: str, *, dev: bool | None = None) -> Tuple[str, Dict]:
         t = _fix_double_quoted_value(t, info)
         t = _insert_missing_commas(t, info)
 
-        # Rewrite alias verbs like add_coloring(...) / add_color_command(...) / colorByChain(...)
+        # Rewrite alias verbs like add_coloring(...) / colorByChain(...)
         t = _rewrite_color_by_chain_alias_verbs(t, info)
 
-        # Normalize targets/plurals (config-driven if possible)
+        # Normalize targets/plurals (config-driven)
         t = _normalize_color_by_chain_target_aliases(t, info)
 
-        # Fix sel="all_lines"/"all_surface"/"all_tube"/etc (rep-like sel) when target is present
+        # Fix sel="all_lines"/etc when target is present
         t = _normalize_color_by_chain_sel_repname(t, info)
 
         # Infer missing target if model encoded it in sel (single-arg form)
@@ -200,11 +154,7 @@ def normalize_dsl(text: str, *, dev: bool | None = None) -> Tuple[str, Dict]:
 
 
 def _cfg_reject(s: str, info: Dict[str, Any]) -> None:
-    """
-    Fail-fast on forbidden patterns from config/rewrite_rules.yaml.
-
-    This prevents unsafe / unsupported DSL from silently slipping through.
-    """
+    """Fail-fast on forbidden patterns from config/rewrite_rules.yaml."""
     if _CFG is None:
         return
     rules = getattr(_CFG, "rewrite_rules", {}) or {}
@@ -216,12 +166,7 @@ def _cfg_reject(s: str, info: Dict[str, Any]) -> None:
 
 
 def _cfg_repair_line(line: str, info: Dict[str, Any]) -> str:
-    """
-    Apply conservative, config-driven repairs on a single line.
-
-    Each repair is applied only if its regex matches the whole line (or is
-    sufficiently anchored by the author). Repairs are intended to be safe.
-    """
+    """Apply conservative, config-driven repairs on a single line."""
     if _CFG is None:
         return line
     rules = getattr(_CFG, "rewrite_rules", {}) or {}
@@ -261,8 +206,11 @@ def _strip_code_fences_and_prefix(s: str, info: Dict[str, Any]) -> str:
 
 def _split_semicolons(s: str, info: Dict[str, Any]) -> str:
     orig = s
-    verbs = "|".join(_VERBS)
-    pat = rf";\s*(?=(?:[-*]\s*|\d+\s*[.)]\s*)?\(?\s*(?:{verbs})\b)"
+    verbs = dsl_verbs()
+    if not verbs:
+        return s
+    verbs_re = "|".join(re.escape(v) for v in verbs)
+    pat = rf";\s*(?=(?:[-*]\s*|\d+\s*[.)]\s*)?\(?\s*(?:{verbs_re})\b)"
     s2 = re.sub(pat, "\n", s, flags=re.I)
     if s2 != orig:
         info["steps"].append("split_semicolons")
@@ -278,8 +226,14 @@ def _looks_like_dsl_stmt(line: str) -> bool:
     if not t:
         return False
     t = _strip_leading_list_marker(t)
-    verbs = "|".join(_VERBS)
-    return bool(re.match(rf"^\(?\s*({verbs})\b", t, flags=re.I))
+
+    verbs = dsl_verbs()
+    if not verbs:
+        # config missing: be conservative, only keep obvious call-like lines
+        return bool(re.match(r"^\(?\s*[A-Za-z_]\w*\s*\(", t))
+
+    verbs_re = "|".join(re.escape(v) for v in verbs)
+    return bool(re.match(rf"^\(?\s*(?:{verbs_re})\b", t, flags=re.I))
 
 
 def _drop_non_dsl_lines(s: str, info: Dict[str, Any]) -> str:
@@ -312,8 +266,8 @@ def _canonicalize_call_verb(s: str, info: Dict[str, Any]) -> str:
 
     fn_raw = m.group(1)
     fn = fn_raw.lower()
-    if fn in _VERBS and fn_raw.lower() != fn_raw:
-        # Only record when we actually changed case
+    verbs = set(dsl_verbs()) | set(dsl_verbs())  # cached anyway
+    if verbs and fn in verbs and fn_raw.lower() != fn_raw:
         s = fn + s[len(fn_raw) :]
         info["steps"].append("verb_lowercase_call")
 
@@ -326,7 +280,7 @@ def _normalize_parenthesized_form(s: str, info: Dict[str, Any]) -> str:
     if m:
         fn_raw, inner = m.group(1), m.group(2).strip()
         fn = fn_raw.lower()
-        if fn in _VERBS:
+        if fn in set(dsl_verbs()):
             inner = re.sub(r'"\s+([A-Za-z_]\w*\s*=)', r'", \1', inner)
             s = f"{fn}({inner})"
 
@@ -344,7 +298,7 @@ def _normalize_space_arg_form(s: str, info: Dict[str, Any]) -> str:
     if m:
         fn_raw, inner = m.group(1), m.group(2).strip()
         fn = fn_raw.lower()
-        if fn in _VERBS and "=" in inner:
+        if fn in set(dsl_verbs()) and "=" in inner:
             inner = re.sub(r'"\s+([A-Za-z_]\w*\s*=)', r'", \1', inner)
             s = f"{fn}({inner})"
 
@@ -354,12 +308,7 @@ def _normalize_space_arg_form(s: str, info: Dict[str, Any]) -> str:
 
 
 def _fix_double_quoted_value(s: str, info: Dict[str, Any]) -> str:
-    """
-    Fix LLM slip:
-      target=""surface"  -> target="surface"
-      target="surface""  -> target="surface"
-    Conservative: only touches sel= / target=.
-    """
+    """Fix LLM slip: target=""surface" -> target="surface" (and similar for sel)."""
     orig = s
     s2 = re.sub(r'(target|sel)\s*=\s*""([^"]+)"', r'\1="\2"', s)
     s2 = re.sub(r'(target|sel)\s*=\s*"([^"]+)""', r'\1="\2"', s2)
@@ -384,130 +333,88 @@ def _rewrite_color_by_chain_alias_verbs(s: str, info: Dict[str, Any]) -> str:
       add_color_command(target="atom", sel="all") -> color_by_chain(sel="all", target="atom")
       add_color_by_chain(target="line", sel="x")  -> color_by_chain(sel="x", target="line")
       colorByChain("all_1crn", "surface")         -> color_by_chain(sel="all_1crn", target="surface")
-      colorByChain(sel="all_1crn", target="surface") -> color_by_chain(sel="all_1crn", target="surface")
-
-    Conservative handling:
-      - If only target is present -> default sel="all"
-      - If only sel is present    -> emit color_by_chain(sel="...") (single-arg inference may kick in)
     """
     orig = s
     t = s.strip()
 
-    # --- camelCase: colorByChain(...) ---
-    m = re.fullmatch(r"colorbychain\(\s*(.*?)\s*\)\s*", t, flags=re.I | re.S)
-    if m:
-        inner = m.group(1).strip()
+    aliases = set(target_aliases().keys())  # not used; kept for clarity
 
-        # positional: "SEL","TARGET"
+    # Handle colorByChain / colorbychain specially (positional form).
+    if re.fullmatch(r"colorbychain\(\s*(.*?)\s*\)\s*", t, flags=re.I | re.S):
+        inner = re.fullmatch(r"colorbychain\(\s*(.*?)\s*\)\s*", t, flags=re.I | re.S).group(1).strip()
+
         mpos = re.fullmatch(r'"([^"]+)"\s*,\s*"([^"]+)"', inner)
         if mpos:
             sel, target = mpos.group(1), mpos.group(2)
             s2 = f'color_by_chain(sel="{sel}", target="{target}")'
-            if s2 != orig:
-                info["steps"].append("rewrite_color_alias_verb")
+            info["steps"].append("rewrite_color_alias_verb")
             return s2
 
-        # kwargs: sel="...", target="..." (or rep="...")
         sel_m = re.search(r'sel\s*=\s*"([^"]+)"', inner)
-        tgt_m = re.search(r'target\s*=\s*"([^"]+)"', inner)
-        if not tgt_m:
-            tgt_m = re.search(r'rep\s*=\s*"([^"]+)"', inner)
+        tgt_m = re.search(r'target\s*=\s*"([^"]+)"', inner) or re.search(r'rep\s*=\s*"([^"]+)"', inner)
 
         sel = sel_m.group(1) if sel_m else None
         target = tgt_m.group(1) if tgt_m else None
 
         if target and not sel:
-            s2 = f'color_by_chain(sel="all", target="{target}")'
             info["steps"].append("rewrite_color_alias_verb")
-            return s2
+            return f'color_by_chain(sel="all", target="{target}")'
         if sel and not target:
-            s2 = f'color_by_chain(sel="{sel}")'
             info["steps"].append("rewrite_color_alias_verb")
-            return s2
+            return f'color_by_chain(sel="{sel}")'
         if sel and target:
-            s2 = f'color_by_chain(sel="{sel}", target="{target}")'
             info["steps"].append("rewrite_color_alias_verb")
-            return s2
+            return f'color_by_chain(sel="{sel}", target="{target}")'
 
         return s
 
-    # --- alias verbs with kw-args or positional args ---
-    m = re.fullmatch(
-        r"(add_coloring|add_color_command|add_color_by_chain)\(\s*(.*?)\s*\)\s*",
-        t,
-        flags=re.I | re.S,
-    )
+    # Config-driven alias verbs (non-camelcase)
+    # We only rewrite the known "color-by-chain style" aliases; keep the list in config.
+    cfg_aliases = []
+    if _CFG is not None:
+        rules = getattr(_CFG, "rewrite_rules", {}) or {}
+        cfg_aliases = [str(x).strip().lower() for x in (rules.get("alias_verbs", []) or [])]
+
+    known = [a for a in cfg_aliases if a in {"add_coloring", "add_color_command", "add_color_by_chain"}]
+    if not known:
+        return s
+
+    pat = "|".join(re.escape(v) for v in known)
+    m = re.fullmatch(rf"({pat})\(\s*(.*?)\s*\)\s*", t, flags=re.I | re.S)
     if not m:
         return s
 
     inner = m.group(2).strip()
 
-    # Try kwargs first
     sel_m = re.search(r'sel\s*=\s*"([^"]+)"', inner)
-    tgt_m = re.search(r'target\s*=\s*"([^"]+)"', inner)
-    if not tgt_m:
-        tgt_m = re.search(r'rep\s*=\s*"([^"]+)"', inner)
+    tgt_m = re.search(r'target\s*=\s*"([^"]+)"', inner) or re.search(r'rep\s*=\s*"([^"]+)"', inner)
 
-    # positional: "SEL","TARGET"
     if not (sel_m or tgt_m):
         m2 = re.fullmatch(r'"([^"]+)"\s*,\s*"([^"]+)"', inner)
         if m2:
             sel, target = m2.group(1), m2.group(2)
-            s2 = f'color_by_chain(sel="{sel}", target="{target}")'
             info["steps"].append("rewrite_color_alias_verb")
-            return s2
+            return f'color_by_chain(sel="{sel}", target="{target}")'
         return s
 
     sel = sel_m.group(1) if sel_m else None
     target = tgt_m.group(1) if tgt_m else None
 
     if target and not sel:
-        s2 = f'color_by_chain(sel="all", target="{target}")'
         info["steps"].append("rewrite_color_alias_verb")
-        return s2
-
+        return f'color_by_chain(sel="all", target="{target}")'
     if sel and not target:
-        s2 = f'color_by_chain(sel="{sel}")'
         info["steps"].append("rewrite_color_alias_verb")
-        return s2
-
+        return f'color_by_chain(sel="{sel}")'
     if sel and target:
-        s2 = f'color_by_chain(sel="{sel}", target="{target}")'
         info["steps"].append("rewrite_color_alias_verb")
-        return s2
+        return f'color_by_chain(sel="{sel}", target="{target}")'
 
-    return s
-
-
-def _get_target_aliases() -> Dict[str, str]:
-    """
-    Return target alias mapping, preferring config/synonyms.yaml if available.
-
-    We treat representation aliases as target aliases for color_by_chain.
-    """
-    if _CFG is None:
-        return dict(_FALLBACK_COLOR_TARGET_ALIASES)
-
-    syn = getattr(_CFG, "synonyms", {}) or {}
-
-    # If you later add a dedicated mapping (e.g., color_target_aliases), it will be used.
-    dedicated = syn.get("color_target_aliases")
-    if isinstance(dedicated, dict) and dedicated:
-        return {str(k).lower(): str(v).lower() for k, v in dedicated.items()}
-
-    rep_aliases = syn.get("rep_aliases")
-    if isinstance(rep_aliases, dict) and rep_aliases:
-        return {str(k).lower(): str(v).lower() for k, v in rep_aliases.items()}
-
-    return dict(_FALLBACK_COLOR_TARGET_ALIASES)
+    return s if s == orig else s
 
 
 def _normalize_color_by_chain_target_aliases(s: str, info: Dict[str, Any]) -> str:
-    """
-    Normalize plural/alias targets in color_by_chain calls:
-      target="atoms" -> target="atom"
-      target="lines" -> target="line"
-    """
+    """Normalize alias targets in color_by_chain calls using config mapping."""
     if not s.lower().startswith("color_by_chain("):
         return s
 
@@ -516,7 +423,7 @@ def _normalize_color_by_chain_target_aliases(s: str, info: Dict[str, Any]) -> st
     if not m:
         return s
 
-    aliases = _get_target_aliases()
+    aliases = target_aliases()
     tgt = m.group(1).strip().lower()
     tgt2 = aliases.get(tgt, tgt)
     if tgt2 == tgt:
@@ -530,22 +437,13 @@ def _normalize_color_by_chain_target_aliases(s: str, info: Dict[str, Any]) -> st
 
 def _normalize_color_by_chain_sel_repname(s: str, info: Dict[str, Any]) -> str:
     """
-    Fix common slip where sel accidentally becomes a representation-like token:
-
-      color_by_chain(sel="all_lines", target="line")      -> color_by_chain(sel="all", target="line")
-      color_by_chain(sel="all_surface", target="surface") -> color_by_chain(sel="all", target="surface")
-      color_by_chain(sel="lines", target="line")          -> color_by_chain(sel="all", target="line")
-      color_by_chain(sel="atoms", target="atom")          -> color_by_chain(sel="all", target="atom")
-
-    IMPORTANT:
-    - We only do this when target is present.
-    - We do NOT touch sel="all_1crn" (true structure selection).
+    Fix slip where sel accidentally becomes a representation-like token,
+    but only when target is present and sel is NOT a real structure selection.
     """
     if not s.lower().startswith("color_by_chain("):
         return s
 
     orig = s
-
     m_sel = re.search(r'sel\s*=\s*"([^"]+)"', s)
     m_tgt = re.search(r'target\s*=\s*"([^"]+)"', s)
     if not (m_sel and m_tgt):
@@ -554,22 +452,21 @@ def _normalize_color_by_chain_sel_repname(s: str, info: Dict[str, Any]) -> str:
     sel_raw = m_sel.group(1).strip()
     sel_l = sel_raw.lower()
 
-    # If it's a legit structure selection (all_<4chars>), keep it.
+    # Legit structure selection (all_<pdbid>) must remain untouched.
     if re.fullmatch(r"all_[0-9a-z]{4}", sel_l):
         return s
 
-    aliases = _get_target_aliases()
+    aliases = target_aliases()
+    targets = color_by_chain_targets()
 
-    # Normalize possible "all_<rep>" patterns and bare rep tokens.
     candidate = sel_l
     if candidate.startswith("all_"):
         candidate = candidate[4:]
     candidate = aliases.get(candidate, candidate)
 
-    if candidate not in _COLOR_TARGETS:
+    if targets and candidate not in targets:
         return s
 
-    # Rewrite sel -> "all"
     s2 = re.sub(r'sel\s*=\s*"([^"]+)"', 'sel="all"', s)
     if s2 != orig:
         info["steps"].append("color_by_chain_sel_repname")
@@ -577,33 +474,23 @@ def _normalize_color_by_chain_sel_repname(s: str, info: Dict[str, Any]) -> str:
 
 
 def _normalize_color_by_chain_single_arg(s: str, info: Dict[str, Any]) -> str:
-    """
-    If the model encodes the target in sel (single-arg form), infer target:
-
-      color_by_chain(sel="all_cartoon") -> color_by_chain(sel="all", target="cartoon")
-      color_by_chain(sel="cartoon")     -> color_by_chain(sel="all", target="cartoon")
-      color_by_chain(sel="all_lines")   -> color_by_chain(sel="all", target="line")
-      color_by_chain(sel="all_tube")    -> color_by_chain(sel="all", target="tube")
-
-    NOTE: We intentionally default sel="all" here; your REPL rewrites sel="all"
-    to last_all_sel (all_<code>) for execution correctness.
-    """
+    """Infer target from sel when color_by_chain has only sel=... (config-driven)."""
     orig = s
     m = re.fullmatch(r'color_by_chain\(\s*sel\s*=\s*"([^"]+)"\s*\)\s*', s)
     if not m:
         return s
 
     raw = m.group(1).strip().lower()
-    aliases = _get_target_aliases()
+    aliases = target_aliases()
+    targets = color_by_chain_targets()
 
     candidate = raw[4:] if raw.startswith("all_") else raw
     candidate = aliases.get(candidate, candidate)
 
-    if candidate not in _COLOR_TARGETS:
+    if targets and candidate not in targets:
         return s
 
     s2 = f'color_by_chain(sel="all", target="{candidate}")'
     if s2 != orig:
         info["steps"].append("color_by_chain_infer_target")
     return s2
-
